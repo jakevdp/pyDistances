@@ -1,7 +1,7 @@
 from time import time
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
-from distmetrics import distance, DistanceMetric
+from distmetrics import DistanceMetric
 import itertools
 
 
@@ -12,6 +12,9 @@ DTEST = 10
 VI = np.random.random((DTEST, DTEST))
 VI1 = np.dot(VI, VI.T)
 VI2 = np.dot(VI.T, VI)
+
+# create a user-defined metric
+user_metric = lambda x, y: np.dot(x[::-1], y)
 
 METRIC_DICT = {'euclidean': {},
                'minkowski': dict(p=(1, 1.5, 2.0, 3.0)),
@@ -26,7 +29,8 @@ METRIC_DICT = {'euclidean': {},
                'jaccard': {},
                'chebyshev': {},
                'canberra': {},
-               'braycurtis': {}}
+               'braycurtis': {},
+               user_metric: {}}
 
 BOOL_METRIC_DICT = {'yule' : {},
                     'matching' : {},

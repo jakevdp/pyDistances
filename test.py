@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
-from distmetrics import distance, DistanceMetric
+from distmetrics import DistanceMetric
 import itertools
 
 # dimension for the tests
@@ -122,6 +122,18 @@ def test_pdist_bool(m=15, rseed=0):
                 print Y1[:5, :5]
                 print Y2[:5, :5]
                 assert np.allclose(Y1, Y2)
+
+def test_user_metric(m1 = 2, m2 = 3):
+    X1 = np.random.random((m1, DTEST))
+    X2 = np.random.random((m2, DTEST))
+    f = lambda x, y: np.dot(x[::-1], y)
+
+    dist_metric = DistanceMetric(f)
+    res1 = dist_metric.cdist(X1, X2)
+
+    res2 = cdist(X1, X2, f)
+
+    assert np.allclose(res1, res2)
 
 
 if __name__ == '__main__':

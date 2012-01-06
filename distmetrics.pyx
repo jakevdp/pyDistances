@@ -2,23 +2,22 @@ import numpy as np
 cimport numpy as np
 cimport cython
 
-from cpython cimport bool
-
 from libc.math cimport fabs, fmax, sqrt, pow
 
 # TODO:
 #  Functionality:
 #   - implement within BallTree
 #   - allow compact output from pdist (similar to scipy.spatial.distance.pdist)
-#   - allow user-defined functions as metrics (is this possible?)
 #
 #  Speed:
 #   - use blas for computations where appropriate
+#   - boolean functions are slow: how do we access fast C boolean operations?
 #
-#  Memory:
+#  Memory & storage:
 #   - make cdist/pdist work with fortran arrays (see note below)
 #   - make cdist/pdist work with csr matrices.  This will require writing
 #     a new form of each distance function which accepts csr input.
+#   - figure out how to wrap a memory array with a temporary numpy array
 #
 #  Documentation:
 #   - documentation of metrics
@@ -80,6 +79,10 @@ cdef struct correlation_info:
     DTYPE_t *x1, *x2           # precentered data vectors
     DTYPE_t *norms1, *norms2   # precomputed norms of vectors
 
+# data structure for user-defined metric
+cdef struct user_info:
+    void* func
+
 # general distance data structure.  We use a union because
 # different distance metrics require different ancillary information,
 # and we only need memory allocated for one of the structures.
@@ -89,6 +92,7 @@ cdef union dist_params:
     seuclidean_info seuclidean
     cosine_info cosine
     correlation_info correlation
+    user_info user
 
 
 ###############################################################################
@@ -98,6 +102,15 @@ cdef np.ndarray _norms(np.ndarray X):
 
 cdef np.ndarray _centered(np.ndarray X):
     return X - X.mean(1).reshape((-1, 1))
+
+# TODO: figure out how to do this without copying data
+cdef np.ndarray buffer_to_ndarray(DTYPE_t* x, ITYPE_t n):
+    cdef np.ndarray y = np.empty(n, dtype=DTYPE)
+    cdef DTYPE_t* ydata = <DTYPE_t*> y.data
+    cdef ITYPE_t i
+    for i from 0 <= i < n:
+        ydata[i] = x[i]
+    return y
 
 
 ###############################################################################
@@ -445,7 +458,7 @@ cdef DTYPE_t yule_distance(DTYPE_t* x1, DTYPE_t* x2,
         ntf += TF1 * (1 - TF2)
         ntt += TF1 * TF2
 
-    return (2. * ntf * nft) / (1. * (ntt * nff + ntf * nft))
+    return (2. * ntf * nft) / (ntt * nff + ntf * nft)
 
 
 cdef DTYPE_t matching_distance(DTYPE_t* x1, DTYPE_t* x2,
@@ -582,6 +595,15 @@ cdef DTYPE_t sokalsneath_distance(DTYPE_t* x1, DTYPE_t* x2,
         n_neq += (TF1 != TF2)
 
     return n_neq * 2.0 / (ntt + 2 * n_neq)
+
+
+cdef DTYPE_t user_distance(DTYPE_t* x1, DTYPE_t* x2,
+                           ITYPE_t n, dist_params* params,
+                           ITYPE_t rowindex1,
+                           ITYPE_t rowindex2):
+    cdef np.ndarray y1 = buffer_to_ndarray(x1 + rowindex1 * n, n)
+    cdef np.ndarray y2 = buffer_to_ndarray(x2 + rowindex2 * n, n)
+    return (<object>(params.user.func))(y1, y2)
            
 
 cdef class DistanceMetric(object):
@@ -785,6 +807,16 @@ cdef class DistanceMetric(object):
 
         elif metric == 'sokalsneath':
             self.dfunc = &sokalsneath_distance
+
+        elif callable(metric):
+            x = np.random.random(3)
+            try:
+                res = float(metric(x, x))
+            except:
+                raise ValueError("user-defined metrics must accept two "
+                                 "vectors and return a scalar.")
+            self.params.user.func = <void*> metric
+            self.dfunc = &user_distance
 
         else:
             raise ValueError('unrecognized metric %s' % metric)
@@ -996,17 +1028,63 @@ cdef class DistanceMetric(object):
                                                    &self.params, i1, i2)
 
 
-def distance(x1, x2, metric="euclidean", **kwargs):
-    x1 = np.asarray(x1)
-    x2 = np.asarray(x2)
+def pairwise_distances(X1, X2=None, metric="euclidean", **kwargs):
+    """Compute pairwise distances in the given metric
 
-    shape1 = x1.shape
-    shape2 = x2.shape
+    Parameters
+    ----------
+    X1, X2 : array-like
+        arrays of row vectors.  If X2 is not specified, use X1 = X2
+    metric : string
+        distance metric
+    
+    Other Parameters
+    ----------------
+    V, VI, w, p : specific to metric
 
-    x1 = x1.reshape((-1, shape1[-1]))
-    x2 = x2.reshape((-1, shape2[-1]))
-
+    Returns
+    -------
+    D : ndarray or float
+        distances between the points in x1 and x2
+        shape is X1.shape[:-1] + X2.shape[:-1]
+    
+    """
     dist_metric = DistanceMetric(metric, **kwargs)
-    Y = dist_metric.cdist(x1, x2)
+
+    X1 = np.asarray(X1, dtype=DTYPE, order='C')
+    shape1 = X1.shape
+    X1 = X1.reshape((-1, shape1[-1]))
+
+    if X2 is None or X1 is X2:
+        shape2 = shape1
+        Y = dist_metric.pdist(X1)
+
+    else:
+        X2 = np.asarray(X2, dtype=DTYPE, order='C')
+        shape2 = X2.shape
+        assert shape1[-1] == shape2[-1]
+        X2 = X2.reshape((-1, shape2[-1]))
+
+        Y = dist_metric.cdist(X1, X2)
 
     return Y.reshape(shape1[:-1] + shape2[:-1])
+
+
+# TODO: finish these definitions and document them
+euclidean = lambda x1, x2: \
+    pairwise_distances(x1, x2, "euclidean")
+l2 = lambda x1, x2: \
+    pairwise_distances(x1, x2, "l2")
+manhattan = lambda x1, x2: \
+    pairwise_distances(x1, x2, "manhattan")
+cityblock = lambda x1, x2: \
+    pairwise_distances(x1, x2, "cityblock")
+l1 = lambda x1, x2: \
+    pairwise_distances(x1, x2, "l1")
+chebyshev = lambda x1, x2: \
+    pairwise_distances(x1, x2, "chebyshev")
+minkowski = lambda x1, x2, p=None: \
+    pairwise_distances(x1, x2, "minkowski", p=p)
+wminkowski = lambda x1, x2, p=None, w=None: \
+    pairwise_distances(x1, x2, "wminkowski", p=p, w=w)
+
