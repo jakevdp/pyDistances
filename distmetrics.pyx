@@ -2,18 +2,33 @@ import numpy as np
 cimport numpy as np
 cimport cython
 
+from cpython cimport bool
+
+from libc.math cimport fabs, fmax
+
 # TODO:
-#  - implement within BallTree
-#  - use blas for computations
-#  - speed up multiple computations with cosine distance & correlation
-#    distance.  Currently these will repeatedly compute the norm/mean of
-#    the vectors.
-#  - make cdist/pdist work with fortran arrays
-#  - make cdist/pdist work with csr matrices
-#  - documentation of metrics
-#  - double-check comparison with sklearn.metrics
-#  - allow compact form for pdist (similar to scipy.spatial.distance.pdist)
-#  - allow user-defined metrics (possible?)
+#  Functionality:
+#   - implement within BallTree
+#   - allow compact form for pdist (similar to scipy.spatial.distance.pdist)
+#   - allow user-defined functions as metrics (is this possible?)
+#
+#  Speed:
+#   - use blas for computations where appropriate
+#   - speed up multiple computations with cosine distance & correlation
+#     distance.  Currently these will repeatedly compute the norm/mean of
+#     the vectors.
+#
+#  Memory:
+#   - make cdist/pdist work with fortran arrays
+#   - make cdist/pdist work with csr matrices.  This will require writing
+#     a new form of each distance function which accepts csr input.
+#
+#  Documentation:
+#   - documentation of metrics
+#   - double-check comparison with sklearn.metrics
+#
+#  Templating?
+#   - this would be a great candidate to try out cython templating
 
 DTYPE = np.float64
 ctypedef np.float64_t DTYPE_t
@@ -78,7 +93,7 @@ cdef DTYPE_t manhattan_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef DTYPE_t res = 0
     
     while i1 < i1max:
-        res += abs(x1[i1] - x2[i2])
+        res += fabs(x1[i1] - x2[i2])
         i1 += inc1
         i2 += inc2
 
@@ -92,7 +107,7 @@ cdef DTYPE_t chebyshev_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef DTYPE_t res = 0
     
     while i1 < i1max:
-        res = max(res, abs(x1[i1] - x2[i2]))
+        res = fmax(res, fabs(x1[i1] - x2[i2]))
         i1 += inc1
         i2 += inc2
 
@@ -106,7 +121,7 @@ cdef DTYPE_t minkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef DTYPE_t d, res = 0
     
     while i1 < i1max:
-        d = abs(x1[i1] - x2[i2])
+        d = fabs(x1[i1] - x2[i2])
         res += d ** params.minkowski.p
         i1 += inc1
         i2 += inc2
@@ -121,7 +136,7 @@ cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef DTYPE_t d, res = 0
     
     for i from 0 <= i < n:
-        d = abs(x1[i1] - x2[i2])
+        d = fabs(x1[i1] - x2[i2])
         res += (params.minkowski.w[i] * d) ** params.minkowski.p
         i1 += inc1
         i2 += inc2
@@ -261,8 +276,9 @@ cdef DTYPE_t jaccard_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef ITYPE_t n_disagree = 0
 
     while i1 < i1max:
-        n_disagree += ((x1[i1] != x2[i2])
-                       & ((x1[i1] != 0) | (x2[i2] != 0)))
+        if x1[i1] != 0:
+            if x2[i2] != 0:
+                n_disagree += (x1[i1] != x2[i2])
         i1 += inc1
         i2 += inc2
 
@@ -276,9 +292,9 @@ cdef DTYPE_t canberra_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
 
     while i1 < i1max:
-        denominator = (abs(x1[i1]) + abs(x2[i2]))
+        denominator = (fabs(x1[i1]) + fabs(x2[i2]))
         if denominator > 0:
-            res += abs(x1[i1] - x2[i2]) / denominator
+            res += fabs(x1[i1] - x2[i2]) / denominator
         i1 += inc1
         i2 += inc2
 
@@ -292,9 +308,9 @@ cdef DTYPE_t braycurtis_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
 
     while i1 < i1max:
-        numerator += abs(x1[i1] - x2[i2])
-        denominator += abs(x1[i1])
-        denominator += abs(x2[i2])
+        numerator += fabs(x1[i1] - x2[i2])
+        denominator += fabs(x1[i1])
+        denominator += fabs(x2[i2])
         i1 += inc1
         i2 += inc2
 
@@ -304,7 +320,6 @@ cdef DTYPE_t braycurtis_distance(DTYPE_t* x1, DTYPE_t* x2,
 cdef DTYPE_t yule_distance(DTYPE_t* x1, DTYPE_t* x2,
                            ITYPE_t inc1, ITYPE_t inc2,
                            ITYPE_t n, dist_params* params):
-    # The following implementation matches scipy.spatial.cdist('yule')
     cdef ITYPE_t ntt = 0, nff = 0, ntf = 0, nft = 0
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
     cdef ITYPE_t TF1, TF2
@@ -312,178 +327,94 @@ cdef DTYPE_t yule_distance(DTYPE_t* x1, DTYPE_t* x2,
     while i1 < i1max:
         TF1 = (x1[i1] != 0)
         TF2 = (x2[i2] != 0)
-        nff += (not TF1 and not TF2)
-        nft += (not TF1 and TF2)
-        ntf += (TF1 and not TF2)
-        ntt += (TF1 and TF2)
+        nff += (1 - TF1) * (1 - TF2)
+        nft += (1 - TF1) * TF2
+        ntf += TF1 * (1 - TF2)
+        ntt += TF1 * TF2
 
         i1 += inc1
         i2 += inc2
 
     return (2. * ntf * nft) / (1. * (ntt * nff + ntf * nft))
 
-    # The following implementation matches scipy.spatial.distance.yule:
-    #cdef DTYPE_t ntt = 0, nff = 0, ntf = 0, nft = 0
-    #cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
-    #
-    #while i1 < i1max:
-    #    nff += (1 - x1[i1]) * (1 - x2[i2])
-    #    nft += (1 - x1[i1]) * x2[i2]
-    #    ntf += x1[i1] * (1 - x2[i2])
-    #    ntt += x1[i1] * x2[i2]
-    #
-    #    i1 += inc1
-    #    i2 += inc2
-    #
-    #return 2. * ntf * nft / (ntt * nff + ntf * nft)
-
 
 cdef DTYPE_t matching_distance(DTYPE_t* x1, DTYPE_t* x2,
                                ITYPE_t inc1, ITYPE_t inc2,
                                ITYPE_t n, dist_params* params):
-    # The following implementation matches scipy.spatial.cdist('matching')
-    cdef ITYPE_t ntf = 0, nft = 0
+    cdef ITYPE_t n_neq = 0
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
     cdef ITYPE_t TF1, TF2
 
     while i1 < i1max:
         TF1 = (x1[i1] != 0)
         TF2 = (x2[i2] != 0)
-        nft += (not TF1 and TF2)
-        ntf += (TF1 and not TF2)
+        n_neq += (TF1 != TF2)
 
         i1 += inc1
         i2 += inc2
 
-    return (ntf + nft) * 1. / n
-
-    # The following implementation matches scipy.spatial.distance.matching:
-    #cdef DTYPE_t ntf = 0, nft = 0
-    #cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
-    #
-    #while i1 < i1max:
-    #    nft += (1 - x1[i1]) * x2[i2]
-    #    ntf += x1[i1] * (1 - x2[i2])
-    #
-    #    i1 += inc1
-    #    i2 += inc2
-    #
-    #return ntf * nft * 1. / n
+    return n_neq * 1. / n
 
 
 cdef DTYPE_t dice_distance(DTYPE_t* x1, DTYPE_t* x2,
                            ITYPE_t inc1, ITYPE_t inc2,
                            ITYPE_t n, dist_params* params):
-    # The following implementation matches scipy.spatial.cdist('dice')
-    cdef ITYPE_t ntf = 0, nft = 0, ntt = 0
+    cdef ITYPE_t ntt = 0, n_neq = 0
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
     cdef ITYPE_t TF1, TF2
 
     while i1 < i1max:
         TF1 = (x1[i1] != 0)
         TF2 = (x2[i2] != 0)
-        ntt += (TF1 and TF2)
-        nft += (not TF1 and TF2)
-        ntf += (TF1 and not TF2)
+        ntt += TF1 * TF2
+        n_neq += (TF1 != TF2)
 
         i1 += inc1
         i2 += inc2
 
-    return (ntf + nft) * 1. / (2 * ntt + ntf + nft)
-
-    # The following implementation matches scipy.spatial.distance.dice:
-    #cdef DTYPE_t ntf = 0, nft = 0
-    #cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
-    #
-    #while i1 < i1max:
-    #    ntt += x1[i1] * x2[i2]
-    #    nft += (1 - x1[i1]) * x2[i2]
-    #    ntf += x1[i1] * (1 - x2[i2])
-    #
-    #    i1 += inc1
-    #    i2 += inc2
-    #
-    #return (ntf + nft) * 1. / (2 * ntt + ntf + nft)
+    return n_neq * 1. / (2 * ntt + n_neq)
 
 
 cdef DTYPE_t kulsinski_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 ITYPE_t inc1, ITYPE_t inc2,
                                 ITYPE_t n, dist_params* params):
-    # The following implementation matches scipy.spatial.cdist('kulsinski')
-    cdef ITYPE_t ntt = 0, nff = 0, ntf = 0, nft = 0
+    cdef ITYPE_t ntt = 0, n_neq = 0
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
     cdef ITYPE_t TF1, TF2
 
     while i1 < i1max:
         TF1 = (x1[i1] != 0)
         TF2 = (x2[i2] != 0)
-        nff += (not TF1 and not TF2)
-        nft += (not TF1 and TF2)
-        ntf += (TF1 and not TF2)
-        ntt += (TF1 and TF2)
+        ntt += TF1 * TF2
+        n_neq += (TF1 != TF2)
 
         i1 += inc1
         i2 += inc2
 
-    return (ntf + nft - ntt + n) / (1. * (ntf + nft + n))
-
-    # The following implementation matches scipy.spatial.distance.kulsinski:
-    #cdef DTYPE_t ntt = 0, nff = 0, ntf = 0, nft = 0
-    #cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
-    #
-    #while i1 < i1max:
-    #    nff += (1 - x1[i1]) * (1 - x2[i2])
-    #    nft += (1 - x1[i1]) * x2[i2]
-    #    ntf += x1[i1] * (1 - x2[i2])
-    #    ntt += x1[i1] * x2[i2]
-    #
-    #    i1 += inc1
-    #    i2 += inc2
-    #
-    #return (ntf + nft - ntt + n) / (1. * (ntf + nft + n))
+    return (n_neq - ntt + n) * 1. / (n_neq + n)
 
 
 cdef DTYPE_t rogerstanimoto_distance(DTYPE_t* x1, DTYPE_t* x2,
                                      ITYPE_t inc1, ITYPE_t inc2,
                                      ITYPE_t n, dist_params* params):
-    # The following implementation matches scipy.spatial.cdist('rogerstanimoto')
-    cdef ITYPE_t ntt = 0, nff = 0, ntf = 0, nft = 0
+    cdef ITYPE_t n_neq = 0
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
     cdef ITYPE_t TF1, TF2
 
     while i1 < i1max:
         TF1 = (x1[i1] != 0)
         TF2 = (x2[i2] != 0)
-        nff += (not TF1 and not TF2)
-        nft += (not TF1 and TF2)
-        ntf += (TF1 and not TF2)
-        ntt += (TF1 and TF2)
+        n_neq += (TF1 != TF2)
 
         i1 += inc1
         i2 += inc2
 
-    return (ntf + nft) * 2. / (ntt + nff + 2.0 * (nft + ntf))
-
-    # The following implementation matches scipy.spatial.distance.rogerstanimoto:
-    #cdef DTYPE_t ntt = 0, nff = 0, ntf = 0, nft = 0
-    #cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
-    #
-    #while i1 < i1max:
-    #    nff += (1 - x1[i1]) * (1 - x2[i2])
-    #    nft += (1 - x1[i1]) * x2[i2]
-    #    ntf += x1[i1] * (1 - x2[i2])
-    #    ntt += x1[i1] * x2[i2]
-    #
-    #    i1 += inc1
-    #    i2 += inc2
-    #
-    #return (ntf + nft) * 2. / (ntt + nff + 2.0 * (nft + ntf))
+    return n_neq * 2. / (n + n_neq)
 
 
 cdef DTYPE_t russellrao_distance(DTYPE_t* x1, DTYPE_t* x2,
                                  ITYPE_t inc1, ITYPE_t inc2,
                                  ITYPE_t n, dist_params* params):
-    # The following implementation matches scipy.spatial.cdist('russellrao')
     cdef ITYPE_t ntt = 0
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
     cdef ITYPE_t TF1, TF2
@@ -491,114 +422,61 @@ cdef DTYPE_t russellrao_distance(DTYPE_t* x1, DTYPE_t* x2,
     while i1 < i1max:
         TF1 = (x1[i1] != 0)
         TF2 = (x2[i2] != 0)
-        ntt += (TF1 and TF2)
+        ntt += TF1 * TF2
 
         i1 += inc1
         i2 += inc2
 
     return (n - ntt) * 1. / n
 
-    # The following implementation matches scipy.spatial.distance.russellrao
-    #cdef DTYPE_t ntt = 0, nff = 0, ntf = 0, nft = 0
-    #cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
-    #
-    #while i1 < i1max:
-    #    ntt += x1[i1] * x2[i2]
-    #
-    #    i1 += inc1
-    #    i2 += inc2
-    #
-    #return (n - ntt) * 1. / n
-
 
 cdef DTYPE_t sokalmichener_distance(DTYPE_t* x1, DTYPE_t* x2,
                                     ITYPE_t inc1, ITYPE_t inc2,
                                     ITYPE_t n, dist_params* params):
-    # The following implementation matches scipy.spatial.cdist('sokalmichener')
-    cdef ITYPE_t ntt = 0, ntf = 0, nft = 0, nff = 0
+    cdef ITYPE_t n_neq = 0
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
     cdef ITYPE_t TF1, TF2
 
     while i1 < i1max:
         TF1 = (x1[i1] != 0)
         TF2 = (x2[i2] != 0)
-        nff += (not TF1 and not TF2)
-        nft += (not TF1 and TF2)
-        ntf += (TF1 and not TF2)
-        ntt += (TF1 and TF2)
+        n_neq += (TF1 != TF2)
 
         i1 += inc1
         i2 += inc2
 
-    return (ntf + nft) * 2.0 / (ntt + nff + 2.0 * (ntf + nft))
-
-    # The following implementation matches scipy.spatial.distance.sokalmichener
-    #cdef DTYPE_t ntt = 0, nff = 0, ntf = 0, nft = 0
-    #cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
-    #
-    #while i1 < i1max:
-    #    nff += (1 - x1[i1]) * (1 - x2[i2])
-    #    nft += (1 - x1[i1]) * x2[i2]
-    #    ntf += x1[i1] * (1 - x2[i2])
-    #    ntt += x1[i1] * x2[i2]
-    #
-    #    i1 += inc1
-    #    i2 += inc2
-    #
-    #return (ntf + nft) * 2.0 / (ntt + nff + 2.0 * (ntf + nft))
+    return n_neq * 2.0 / (n + n_neq)
 
 
 cdef DTYPE_t sokalsneath_distance(DTYPE_t* x1, DTYPE_t* x2,
                                   ITYPE_t inc1, ITYPE_t inc2,
                                   ITYPE_t n, dist_params* params):
-    # The following implementation matches scipy.spatial.cdist('sokalsneath')
-    cdef ITYPE_t ntt = 0, ntf = 0, nft = 0
+    cdef ITYPE_t ntt = 0, n_neq = 0
     cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
     cdef ITYPE_t TF1, TF2
 
     while i1 < i1max:
         TF1 = (x1[i1] != 0)
         TF2 = (x2[i2] != 0)
-        nft += (not TF1 and TF2)
-        ntf += (TF1 and not TF2)
-        ntt += (TF1 and TF2)
+        ntt += TF1 * TF2
+        n_neq += (TF1 != TF2)
 
         i1 += inc1
         i2 += inc2
 
-    return (ntf + nft) * 2.0 / (ntt + 2.0 * (ntf + nft))
-
-    # The following implementation matches scipy.spatial.distance.sokalsneath
-    #cdef DTYPE_t ntt = 0, ntf = 0, nft = 0
-    #cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
-    #
-    #while i1 < i1max:
-    #    nft += (1 - x1[i1]) * x2[i2]
-    #    ntf += x1[i1] * (1 - x2[i2])
-    #    ntt += x1[i1] * x2[i2]
-    #
-    #    i1 += inc1
-    #    i2 += inc2
-    #
-    #return (ntf + nft) * 2.0 / (ntt + 2.0 * (ntf + nft))
-                
+    return n_neq * 2.0 / (ntt + 2 * n_neq)
+           
 
 cdef class DistanceMetric(object):
-    # attributes used for all distances
+    # C attributes which store information about the distance function
     cdef dist_params params
     cdef dist_func dfunc
 
-    # array attributes used for mahalanobis distance
-    cdef np.ndarray mahalanobis_VI  # stores the inverse of matrix V
-
-    # array attributes used for standardized euclidean distance
-    cdef np.ndarray seuclidean_V
-
-    # array attributes used for weighted minkowski distance
-    cdef np.ndarray minkowski_w
-
-    # work buffer for various routines
-    cdef np.ndarray work_buffer
+    # array attributes used for various distance measures
+    cdef np.ndarray mahalanobis_VI # inverse covariance matrix of data
+    cdef np.ndarray seuclidean_V   # variance array of data
+    cdef np.ndarray minkowski_w    # weights for weighted minkowski
+    cdef np.ndarray work_buffer    # work buffer
 
     # flags for computation
     cdef int learn_params_from_data
@@ -627,23 +505,44 @@ cdef class DistanceMetric(object):
         -----
         ``metric`` can be one of the following:
 
-        - 'euclidean' / 'l2'
-        - 'manhattan' / 'cityblock' / 'l1'
-        - 'chebyshev'
-        - 'minkowski'
-        - 'mahalanobis'
-        - 'seuclidean'
-        - 'sqeuclidean'
-        - 'cosine'
-        - 'correlation'
+        - Metrics designed for floating-point input:
+
+          - 'euclidean' / 'l2'
+          - 'manhattan' / 'cityblock' / 'l1'
+          - 'chebyshev'
+          - 'minkowski'
+          - 'wminkowski'
+          - 'mahalanobis'
+          - 'seuclidean'
+          - 'sqeuclidean'
+          - 'cosine'
+          - 'correlation'
+          - 'hamming'
+          - 'jaccard'
+          - 'canberra'
+          - 'braycurtis'
+
+        - Metrics designed for boolean input:
+        
+          - 'yule'
+          - 'matching'
+          - 'dice'
+          - 'kulsinski'
+          - 'rogerstanimoto'
+          - 'russellrao'
+          - 'sokalmichener'
+          - 'sokalsneath'
+          
+        For details on the form of the metrics, see the docstring of
+        :class:`distance_metrics`.
 
         """
         self.learn_params_from_data = False
 
-        if metric == "euclidean":
+        if metric in ["euclidean", 'l2', None]:
             self.dfunc = &euclidean_distance
 
-        elif metric in ("manhattan", "cityblock"):
+        elif metric in ("manhattan", "cityblock", "l1"):
             self.dfunc = &manhattan_distance
 
         elif metric == "chebyshev":
@@ -801,23 +700,12 @@ cdef class DistanceMetric(object):
             if self.learn_params_from_data:
                 # covariance matrix was not specified: compute it from data
                 if X2 is None:
-                    mu1 = np.mean(X1, 0)
-                    X1mu = X1 - mu1
-                    V = np.dot(X1mu.T, X1mu)
-                    V /= (X1.shape[0] - 1)
-                
+                    V = np.cov(X1.T)
                 else:
-                    mu1 = np.mean(X1, 0)
-                    mu2 = np.mean(X2, 0)
-                    mu = ((X1.shape[0] * mu1 + X2.shape[0] * mu2)
-                          / (X1.shape[0] + X2.shape[0]))
-                    X1mu = X1 - mu
-                    X2mu = X2 - mu
-                    V = np.dot(X1mu.T, X1mu) + np.dot(X2mu.T, X2mu)
-                    V /= (X1.shape[0] + X2.shape[0] - 1)
+                    V = np.cov(np.vstack((X1, X2)).T)
 
                 # TODO: what about singular matrices?  How to handle this?
-                self.mahalanobis_VI = np.linalg.inv(V)
+                self.mahalanobis_VI = np.linalg.inv(V).T
                 self.work_buffer = np.zeros(V.shape[0])
                 self.params.mahalanobis.n = n
                 self.params.mahalanobis.VI = \
