@@ -64,100 +64,80 @@ cdef union dist_params:
     seuclidean_info seuclidean
 
 # define a pointer to a general distance function.
-ctypedef DTYPE_t (*dist_func)(DTYPE_t*, DTYPE_t*, ITYPE_t,
-                              ITYPE_t, ITYPE_t, dist_params*)
+ctypedef DTYPE_t (*dist_func)(DTYPE_t*, DTYPE_t*, ITYPE_t, dist_params*)
 
 
 ###############################################################################
 # Define the various distance functions
 
 cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                ITYPE_t inc1, ITYPE_t inc2,
                                 ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
+    cdef ITYPE_t i
     cdef DTYPE_t d, res = 0
     
-    while i1 < i1max:
-        d = x1[i1] - x2[i2]
+    for i from 0 <= i < n:
+        d = x1[i] - x2[i]
         res += d * d
-        i1 += inc1
-        i2 += inc2
     
     return res ** 0.5
 
 
 cdef DTYPE_t manhattan_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                ITYPE_t inc1, ITYPE_t inc2,
                                 ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
+    cdef ITYPE_t i
     cdef DTYPE_t res = 0
     
-    while i1 < i1max:
-        res += fabs(x1[i1] - x2[i2])
-        i1 += inc1
-        i2 += inc2
+    for i from 0 <= i < n:
+        res += fabs(x1[i] - x2[i])
 
     return res
 
 
 cdef DTYPE_t chebyshev_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                ITYPE_t inc1, ITYPE_t inc2,
                                 ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
+    cdef ITYPE_t i
     cdef DTYPE_t res = 0
     
-    while i1 < i1max:
-        res = fmax(res, fabs(x1[i1] - x2[i2]))
-        i1 += inc1
-        i2 += inc2
+    for i from 0 <= i < n:
+        res = fmax(res, fabs(x1[i] - x2[i]))
 
     return res
 
 
 cdef DTYPE_t minkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                ITYPE_t inc1, ITYPE_t inc2,
                                 ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
+    cdef ITYPE_t i
     cdef DTYPE_t d, res = 0
-    
-    while i1 < i1max:
-        d = fabs(x1[i1] - x2[i2])
+
+    for i from 0 <= i < n:
+        d = fabs(x1[i] - x2[i])
         res += d ** params.minkowski.p
-        i1 += inc1
-        i2 += inc2
 
     return res ** (1. / params.minkowski.p)
 
 
 cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 ITYPE_t inc1, ITYPE_t inc2,
                                  ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i, i1 = 0, i2 = 0
+    cdef ITYPE_t i
     cdef DTYPE_t d, res = 0
     
     for i from 0 <= i < n:
-        d = fabs(x1[i1] - x2[i2])
+        d = fabs(x1[i] - x2[i])
         res += (params.minkowski.w[i] * d) ** params.minkowski.p
-        i1 += inc1
-        i2 += inc2
 
     return res ** (1. / params.minkowski.p)
 
 
 cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  ITYPE_t inc1, ITYPE_t inc2,
                                   ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i, j, i1 = 0, i2 = 0
-    cdef ITYPE_t i1max = inc1 * n, i2max = inc2 * n
+    cdef ITYPE_t i, j
     cdef DTYPE_t d, res = 0
 
     assert n == params.mahalanobis.n
 
     # TODO: use blas here
     for i from 0 <= i < n:
-        params.mahalanobis.work_buffer[i] = x1[i1] - x2[i2]
-        i1 += inc1
-        i2 += inc2
+        params.mahalanobis.work_buffer[i] = x1[i] - x2[i]
 
     for i from 0 <= i < n:
         d = 0
@@ -170,299 +150,237 @@ cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
 
 
 cdef DTYPE_t seuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 ITYPE_t inc1, ITYPE_t inc2,
                                  ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i = 0, i1 = 0, i2 = 0
+    cdef ITYPE_t i
     cdef DTYPE_t d, res = 0
     
     for i from 0 <= i < n:
-        d = x1[i1] - x2[i2]
+        d = x1[i] - x2[i]
         res += d * d / params.seuclidean.V[i]
-        i1 += inc1
-        i2 += inc2
     
     return res ** 0.5
 
 
 cdef DTYPE_t sqeuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  ITYPE_t inc1, ITYPE_t inc2,
                                   ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
+    cdef ITYPE_t i
     cdef DTYPE_t d, res = 0
-    
-    while i1 < i1max:
-        d = x1[i1] - x2[i2]
+
+    for i from 0 <= i < n:
+        d = x1[i] - x2[i]
         res += d * d
-        i1 += inc1
-        i2 += inc2
     
     return res
 
 
 cdef DTYPE_t cosine_distance(DTYPE_t* x1, DTYPE_t* x2,
-                             ITYPE_t inc1, ITYPE_t inc2,
                              ITYPE_t n, dist_params* params):
+    cdef ITYPE_t i
     cdef DTYPE_t x1nrm = 0, x2nrm = 0, x1Tx2 = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n, i2max = inc2 * n
 
     # TODO : think about how to speed this up for cdist & pdist by
     #        only computing the norm once per point
 
     # TODO: use blas here
-    while i1 < i1max:
-        x1nrm += x1[i1] * x1[i1]
-        x2nrm += x2[i2] * x2[i2]
-        x1Tx2 += x1[i1] * x2[i2]
-        i1 += inc1
-        i2 += inc2
+    for i from 0 <= i < n:
+        x1nrm += x1[i] * x1[i]
+        x2nrm += x2[i] * x2[i]
+        x1Tx2 += x1[i] * x2[i]
 
     return 1.0 - (x1Tx2) / np.sqrt(x1nrm * x2nrm)
 
 
 cdef DTYPE_t correlation_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  ITYPE_t inc1, ITYPE_t inc2,
                                   ITYPE_t n, dist_params* params):
+    cdef ITYPE_t i
     cdef DTYPE_t mu1 = 0, mu2 = 0, x1nrm = 0, x2nrm = 0, x1Tx2 = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
 
     cdef DTYPE_t tmp1, tmp2
 
     # TODO : think about how to speed this up for cdist & pdist by
     #        only computing the mean once per point
-
-    while i1 < i1max:
-        mu1 += x1[i1]
-        mu2 += x2[i2]
-        i1 += inc1
-        i2 += inc2
+    for i from 0 <= i < n:
+        mu1 += x1[i]
+        mu2 += x2[i]
     mu1 /= n
     mu2 /= n
 
     # TODO : use blas here
-
-    i1 = 0
-    i2 = 0
-    while i1 < i1max:
-        tmp1 = x1[i1] - mu1
-        tmp2 = x2[i2] - mu2
+    for i from 0 <= i < n:
+        tmp1 = x1[i] - mu1
+        tmp2 = x2[i] - mu2
         x1nrm += tmp1 * tmp1
         x2nrm += tmp2 * tmp2
         x1Tx2 += tmp1 * tmp2
-        i1 += inc1
-        i2 += inc2
 
     return 1. - x1Tx2 / np.sqrt(x1nrm * x2nrm)
 
 
 cdef DTYPE_t hamming_distance(DTYPE_t* x1, DTYPE_t* x2,
-                              ITYPE_t inc1, ITYPE_t inc2,
                               ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t n_disagree = 0
 
-    while i1 < i1max:
-        n_disagree += (x1[i1] != x2[i2])
-        
-        i1 += inc1
-        i2 += inc2
+    for i from 0 <= i < n:
+        n_disagree += (x1[i] != x2[i])
 
     return n_disagree * 1. / n
 
 
 cdef DTYPE_t jaccard_distance(DTYPE_t* x1, DTYPE_t* x2,
-                              ITYPE_t inc1, ITYPE_t inc2,
                               ITYPE_t n, dist_params* params):
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t n_disagree = 0
 
-    while i1 < i1max:
-        if x1[i1] != 0:
-            if x2[i2] != 0:
-                n_disagree += (x1[i1] != x2[i2])
-        i1 += inc1
-        i2 += inc2
+    for i from 0 <= i < n:
+        if x1[i] != 0:
+            if x2[i] != 0:
+                if (x1[i] != x2[i]):
+                    n_disagree += 1
 
     return n_disagree * 1. / n
 
 
 cdef DTYPE_t canberra_distance(DTYPE_t* x1, DTYPE_t* x2,
-                               ITYPE_t inc1, ITYPE_t inc2,
                                ITYPE_t n, dist_params* params):
     cdef DTYPE_t res = 0, denominator
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
+    cdef ITYPE_t i
 
-    while i1 < i1max:
-        denominator = (fabs(x1[i1]) + fabs(x2[i2]))
+    for i from 0 <= i < n:
+        denominator = (fabs(x1[i]) + fabs(x2[i]))
         if denominator > 0:
-            res += fabs(x1[i1] - x2[i2]) / denominator
-        i1 += inc1
-        i2 += inc2
+            res += fabs(x1[i] - x2[i]) / denominator
 
     return res
 
 
 cdef DTYPE_t braycurtis_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 ITYPE_t inc1, ITYPE_t inc2,
                                  ITYPE_t n, dist_params* params):
+    cdef ITYPE_t i
     cdef DTYPE_t numerator = 0, denominator = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = inc1 * n
 
-    while i1 < i1max:
-        numerator += fabs(x1[i1] - x2[i2])
-        denominator += fabs(x1[i1])
-        denominator += fabs(x2[i2])
-        i1 += inc1
-        i2 += inc2
+    for i from 0 <= i < n:
+        numerator += fabs(x1[i] - x2[i])
+        denominator += fabs(x1[i])
+        denominator += fabs(x2[i])
 
     return numerator / denominator
 
 
 cdef DTYPE_t yule_distance(DTYPE_t* x1, DTYPE_t* x2,
-                           ITYPE_t inc1, ITYPE_t inc2,
                            ITYPE_t n, dist_params* params):
     cdef ITYPE_t ntt = 0, nff = 0, ntf = 0, nft = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t TF1, TF2
 
-    while i1 < i1max:
-        TF1 = (x1[i1] != 0)
-        TF2 = (x2[i2] != 0)
+    for i from 0 <= i < n:
+        TF1 = (x1[i] != 0)
+        TF2 = (x2[i] != 0)
         nff += (1 - TF1) * (1 - TF2)
         nft += (1 - TF1) * TF2
         ntf += TF1 * (1 - TF2)
         ntt += TF1 * TF2
 
-        i1 += inc1
-        i2 += inc2
-
     return (2. * ntf * nft) / (1. * (ntt * nff + ntf * nft))
 
 
 cdef DTYPE_t matching_distance(DTYPE_t* x1, DTYPE_t* x2,
-                               ITYPE_t inc1, ITYPE_t inc2,
                                ITYPE_t n, dist_params* params):
     cdef ITYPE_t n_neq = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t TF1, TF2
 
-    while i1 < i1max:
-        TF1 = (x1[i1] != 0)
-        TF2 = (x2[i2] != 0)
+    for i from 0 <= i < n:
+        TF1 = (x1[i] != 0)
+        TF2 = (x2[i] != 0)
         n_neq += (TF1 != TF2)
-
-        i1 += inc1
-        i2 += inc2
 
     return n_neq * 1. / n
 
 
 cdef DTYPE_t dice_distance(DTYPE_t* x1, DTYPE_t* x2,
-                           ITYPE_t inc1, ITYPE_t inc2,
                            ITYPE_t n, dist_params* params):
     cdef ITYPE_t ntt = 0, n_neq = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t TF1, TF2
 
-    while i1 < i1max:
-        TF1 = (x1[i1] != 0)
-        TF2 = (x2[i2] != 0)
+    for i from 0 <= i < n:
+        TF1 = (x1[i] != 0)
+        TF2 = (x2[i] != 0)
         ntt += TF1 * TF2
         n_neq += (TF1 != TF2)
-
-        i1 += inc1
-        i2 += inc2
 
     return n_neq * 1. / (2 * ntt + n_neq)
 
 
 cdef DTYPE_t kulsinski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                ITYPE_t inc1, ITYPE_t inc2,
                                 ITYPE_t n, dist_params* params):
     cdef ITYPE_t ntt = 0, n_neq = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t TF1, TF2
 
-    while i1 < i1max:
-        TF1 = (x1[i1] != 0)
-        TF2 = (x2[i2] != 0)
+    for i from 0 <= i < n:
+        TF1 = (x1[i] != 0)
+        TF2 = (x2[i] != 0)
         ntt += TF1 * TF2
         n_neq += (TF1 != TF2)
-
-        i1 += inc1
-        i2 += inc2
 
     return (n_neq - ntt + n) * 1. / (n_neq + n)
 
 
 cdef DTYPE_t rogerstanimoto_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                     ITYPE_t inc1, ITYPE_t inc2,
                                      ITYPE_t n, dist_params* params):
     cdef ITYPE_t n_neq = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t TF1, TF2
 
-    while i1 < i1max:
-        TF1 = (x1[i1] != 0)
-        TF2 = (x2[i2] != 0)
+    for i from 0 <= i < n:
+        TF1 = (x1[i] != 0)
+        TF2 = (x2[i] != 0)
         n_neq += (TF1 != TF2)
-
-        i1 += inc1
-        i2 += inc2
 
     return n_neq * 2. / (n + n_neq)
 
 
 cdef DTYPE_t russellrao_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 ITYPE_t inc1, ITYPE_t inc2,
                                  ITYPE_t n, dist_params* params):
     cdef ITYPE_t ntt = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t TF1, TF2
 
-    while i1 < i1max:
-        TF1 = (x1[i1] != 0)
-        TF2 = (x2[i2] != 0)
+    for i from 0 <= i < n:
+        TF1 = (x1[i] != 0)
+        TF2 = (x2[i] != 0)
         ntt += TF1 * TF2
-
-        i1 += inc1
-        i2 += inc2
 
     return (n - ntt) * 1. / n
 
 
 cdef DTYPE_t sokalmichener_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                    ITYPE_t inc1, ITYPE_t inc2,
                                     ITYPE_t n, dist_params* params):
     cdef ITYPE_t n_neq = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t TF1, TF2
 
-    while i1 < i1max:
-        TF1 = (x1[i1] != 0)
-        TF2 = (x2[i2] != 0)
+    for i from 0 <= i < n:
+        TF1 = (x1[i] != 0)
+        TF2 = (x2[i] != 0)
         n_neq += (TF1 != TF2)
-
-        i1 += inc1
-        i2 += inc2
 
     return n_neq * 2.0 / (n + n_neq)
 
 
 cdef DTYPE_t sokalsneath_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  ITYPE_t inc1, ITYPE_t inc2,
                                   ITYPE_t n, dist_params* params):
     cdef ITYPE_t ntt = 0, n_neq = 0
-    cdef ITYPE_t i1 = 0, i2 = 0, i1max = n * inc1
+    cdef ITYPE_t i
     cdef ITYPE_t TF1, TF2
 
-    while i1 < i1max:
-        TF1 = (x1[i1] != 0)
-        TF2 = (x2[i2] != 0)
+    for i from 0 <= i < n:
+        TF1 = (x1[i] != 0)
+        TF2 = (x2[i] != 0)
         ntt += TF1 * TF2
         n_neq += (TF1 != TF2)
-
-        i1 += inc1
-        i2 += inc2
 
     return n_neq * 2.0 / (ntt + 2 * n_neq)
            
@@ -808,7 +726,7 @@ cdef class DistanceMetric(object):
             for i2 from 0 <= i2 < m2:
                 Y[i1, i2] = self.dfunc(pX1 + i1 * n,
                                        pX2 + i2 * n,
-                                       1, 1, n, &self.params)
+                                       n, &self.params)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -831,7 +749,7 @@ cdef class DistanceMetric(object):
             for i2 from i1 < i2 < m:
                 Y[i1, i2] = Y[i2, i1] = self.dfunc(pX + i1 * n,
                                                    pX + i2 * n,
-                                                   1, 1, n, &self.params)
+                                                   n, &self.params)
 
 
 def distance(x1, x2, metric="euclidean", **kwargs):
