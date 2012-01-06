@@ -30,6 +30,19 @@ from libc.math cimport fabs, fmax
 #  Templating?
 #   - this would be a great candidate to try out cython templating
 
+# One idea:
+#  to save on memory, and to allow speedup of cosine distace & corrnelation
+#  distance, we could use a distannce function with the signature
+#  dfunc(DTYPE_t* x1, DTYPE_t* x2, ITYPE_t n,
+#        ITYPE_t rowstride1, ITYPE_t colstride1,
+#        ITYPE_t rowstride2, ITYPE_t colstride2,
+#        ITYPE_t rowoffset1=0,  ITYPE_t rowoffset2=0,
+#        dist_params* params)
+#
+#  This would allow arbitrary numpy arrays to be used by the function,
+#  and would allow params to include precomputed information about each
+#  point, accessed via the index `rowoffset*`
+
 DTYPE = np.float64
 ctypedef np.float64_t DTYPE_t
 
