@@ -1,3 +1,8 @@
+===========
+pyDistances
+===========
+Fast cython distance computations in a variety of metrics
+
 This is the outline of a framework that will allow general distance
 metrics to be incorporated into scikit-learn BallTree.  The idea is
 that we need a fast way to compute the distance between two points
@@ -21,3 +26,9 @@ run bench.py for a comparison of runtimes between pyDistance and scipy.spatial
 for the available metrics.  So far, we're doing pretty well: very close in
 most cases.  One exception is boolean values: I need to figure out how to do
 fast boolean computations within cython.
+
+TODO
+----
+Search TODO within distmetrics.pyx to see a list.  One big one (which should
+be straightforward) is to make the distance metrics work with CSR matrices.
+This will involve writing an alternate version of each core distance function.
