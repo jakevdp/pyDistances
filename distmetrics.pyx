@@ -4,6 +4,10 @@ cimport cython
 
 from libc.math cimport fabs, fmax, sqrt, pow
 
+# python data types (corresponding C-types are in pxd file)
+DTYPE = np.float64
+ITYPE = np.int32
+
 # TODO:
 #  Functionality:
 #   - implement within BallTree
@@ -18,6 +22,7 @@ from libc.math cimport fabs, fmax, sqrt, pow
 #   - make cdist/pdist work with csr matrices.  This will require writing
 #     a new form of each distance function which accepts csr input.
 #   - figure out how to wrap a memory array with a temporary numpy array
+#     (buffer_to_array function, below)
 #
 #  Documentation:
 #   - documentation of metrics
@@ -38,61 +43,6 @@ from libc.math cimport fabs, fmax, sqrt, pow
 #
 #  This would allow arbitrary numpy arrays to be used by the function,
 #   but would slightly slow down computation.
-
-# data type
-DTYPE = np.float64
-ctypedef np.float64_t DTYPE_t
-
-# index type
-ITYPE = np.int32
-ctypedef np.int32_t ITYPE_t
-
-###############################################################################
-# Define data structures needed for distance calculations
-
-# data structure used for mahalanobis distance
-cdef struct mahalanobis_info:
-    ITYPE_t n             # size of arrays
-    DTYPE_t* VI   # pointer to buffer of size n * n
-    DTYPE_t* work_buffer  # pointer to buffer of size n
-
-# data structure used for (weighted) minkowski distance
-cdef struct minkowski_info:
-    ITYPE_t n   # size of array
-    DTYPE_t p   # specifies p-norm
-    DTYPE_t* w  # pointer to buffer of size n
-
-# data structure used for standardized euclidean distance
-cdef struct seuclidean_info:
-    ITYPE_t n   # size of array
-    DTYPE_t* V  # pointer to buffer of size n
-
-# data structure used for cosine distance
-cdef struct cosine_info:
-    ITYPE_t precomputed_norms  # flag to record whether norms are precomputed
-    DTYPE_t *norms1, *norms2   # precomputed norms of vectors
-
-# data structure used for correlation distance
-cdef struct correlation_info:
-    ITYPE_t precomputed_data   # flag to record whether data is pre-centered
-                               #  and norms are pre-computed
-    DTYPE_t *x1, *x2           # precentered data vectors
-    DTYPE_t *norms1, *norms2   # precomputed norms of vectors
-
-# data structure for user-defined metric
-cdef struct user_info:
-    void* func
-
-# general distance data structure.  We use a union because
-# different distance metrics require different ancillary information,
-# and we only need memory allocated for one of the structures.
-cdef union dist_params:
-    minkowski_info minkowski
-    mahalanobis_info mahalanobis
-    seuclidean_info seuclidean
-    cosine_info cosine
-    correlation_info correlation
-    user_info user
 
 
 ###############################################################################
@@ -152,10 +102,6 @@ cdef np.ndarray buffer_to_ndarray(DTYPE_t* x, ITYPE_t n):
 #     about each point: e.g. the mean and norm in cosine_distance and
 #     correlation_distance, etc.
 ###############################################################################
-
-# define a pointer to a generic distance function.
-ctypedef DTYPE_t (*dist_func)(DTYPE_t*, DTYPE_t*, ITYPE_t,
-                              dist_params*, ITYPE_t, ITYPE_t)
 
 cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 ITYPE_t n, dist_params* params,
@@ -607,24 +553,12 @@ cdef DTYPE_t user_distance(DTYPE_t* x1, DTYPE_t* x2,
            
 
 cdef class DistanceMetric(object):
-    # C attributes which store information about the distance function
-    cdef dist_params params
-    cdef dist_func dfunc
-
-    # array attributes used for various distance measures
-    # note: some of these could be combined for a smaller memory footprint,
-    #       but for clarity in reading the code we use separate objects.
-    cdef np.ndarray mahalanobis_VI     # inverse covariance matrix of data
-    cdef np.ndarray seuclidean_V       # variance array of data
-    cdef np.ndarray minkowski_w        # weights for weighted minkowski
-    cdef np.ndarray norms1             # precomputed norms, used for cosine
-    cdef np.ndarray norms2             #  and correlation distances
-    cdef np.ndarray precentered_data1  # pre-centered data, used for
-    cdef np.ndarray precentered_data2  #  correlation distance
-    cdef np.ndarray work_buffer        # work buffer
-
-    # flags for computation
-    cdef int learn_params_from_data
+    def __cinit__(self):
+        """Initialize all arrays to empty"""
+        self.mahalanobis_VI = self.seuclidean_V = self.minkowski_w =\
+            self.norms1 = self.norms2 = self.precentered_data1 =\
+            self.precentered_data2 = self.work_buffer = np.ndarray(0)
+        self.dfunc = &euclidean_distance
 
     def __init__(self, metric="euclidean", w=None, p=None, V=None, VI=None):
         """Object for computing distance between points.
