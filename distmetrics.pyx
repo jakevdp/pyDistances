@@ -4,48 +4,47 @@ cimport cython
 
 from cpython cimport bool
 
-from libc.math cimport fabs, fmax, sqrt
+from libc.math cimport fabs, fmax, sqrt, pow
 
 # TODO:
 #  Functionality:
 #   - implement within BallTree
-#   - allow compact form for pdist (similar to scipy.spatial.distance.pdist)
+#   - allow compact output from pdist (similar to scipy.spatial.distance.pdist)
 #   - allow user-defined functions as metrics (is this possible?)
 #
 #  Speed:
 #   - use blas for computations where appropriate
-#   - speed up multiple computations with cosine distance & correlation
-#     distance.  Currently these will repeatedly compute the norm/mean of
-#     the vectors.
 #
 #  Memory:
-#   - make cdist/pdist work with fortran arrays
+#   - make cdist/pdist work with fortran arrays (see note below)
 #   - make cdist/pdist work with csr matrices.  This will require writing
 #     a new form of each distance function which accepts csr input.
 #
 #  Documentation:
 #   - documentation of metrics
-#   - double-check comparison with sklearn.metrics
+#   - double-check consistency with sklearn.metrics & scipy.spatial.distance
 #
 #  Templating?
 #   - this would be a great candidate to try out cython templating
+#
 
 # One idea:
-#  to save on memory, and to allow speedup of cosine distace & corrnelation
-#  distance, we could use a distannce function with the signature
+#  to save on memory, we could define general distance functions with
+#   the signature
 #  dfunc(DTYPE_t* x1, DTYPE_t* x2, ITYPE_t n,
 #        ITYPE_t rowstride1, ITYPE_t colstride1,
 #        ITYPE_t rowstride2, ITYPE_t colstride2,
-#        ITYPE_t rowoffset1,  ITYPE_t rowoffset2,
+#        ITYPE_t rowindex1,  ITYPE_t rowindex2,
 #        dist_params* params)
 #
 #  This would allow arbitrary numpy arrays to be used by the function,
-#  and would allow params to include precomputed information about each
-#  point, accessed via the index `rowoffset*`
+#   but would slightly slow down computation.
 
+# data type
 DTYPE = np.float64
 ctypedef np.float64_t DTYPE_t
 
+# index type
 ITYPE = np.int32
 ctypedef np.int32_t ITYPE_t
 
@@ -82,7 +81,8 @@ cdef struct correlation_info:
     DTYPE_t *norms1, *norms2   # precomputed norms of vectors
 
 # general distance data structure.  We use a union because
-# different distance metrics require different ancillary information.
+# different distance metrics require different ancillary information,
+# and we only need memory allocated for one of the structures.
 cdef union dist_params:
     minkowski_info minkowski
     mahalanobis_info mahalanobis
@@ -93,8 +93,11 @@ cdef union dist_params:
 
 ###############################################################################
 # Helper functions
-def compute_norms(X):
+cdef np.ndarray _norms(np.ndarray X):
     return np.sqrt(np.asarray((X ** 2).sum(1), dtype=DTYPE, order='C'))
+
+cdef np.ndarray _centered(np.ndarray X):
+    return X - X.mean(1).reshape((-1, 1))
 
 
 ###############################################################################
@@ -155,7 +158,7 @@ cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
         d = x1[i] - x2[i]
         res += d * d
     
-    return res ** 0.5
+    return sqrt(res)
 
 
 cdef DTYPE_t manhattan_distance(DTYPE_t* x1, DTYPE_t* x2,
@@ -202,9 +205,9 @@ cdef DTYPE_t minkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
 
     for i from 0 <= i < n:
         d = fabs(x1[i] - x2[i])
-        res += d ** params.minkowski.p
+        res += pow(d, params.minkowski.p)
 
-    return res ** (1. / params.minkowski.p)
+    return pow(res, 1. / params.minkowski.p)
 
 
 cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
@@ -219,9 +222,9 @@ cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
     
     for i from 0 <= i < n:
         d = fabs(x1[i] - x2[i])
-        res += (params.minkowski.w[i] * d) ** params.minkowski.p
+        res += pow(params.minkowski.w[i] * d, params.minkowski.p)
 
-    return res ** (1. / params.minkowski.p)
+    return pow(res, 1. / params.minkowski.p)
 
 
 cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
@@ -247,7 +250,7 @@ cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
                   * params.mahalanobis.work_buffer[j])
         res += d * params.mahalanobis.work_buffer[i]
 
-    return res ** 0.5
+    return sqrt(res)
 
 
 cdef DTYPE_t seuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
@@ -264,7 +267,7 @@ cdef DTYPE_t seuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
         d = x1[i] - x2[i]
         res += d * d / params.seuclidean.V[i]
     
-    return res ** 0.5
+    return sqrt(res)
 
 
 cdef DTYPE_t sqeuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
@@ -854,18 +857,18 @@ cdef class DistanceMetric(object):
 
         elif self.dfunc == &cosine_distance:
             self.params.cosine.precomputed_norms = 1
-            self.norms1 = compute_norms(X1)
+            self.norms1 = _norms(X1)
             self.params.cosine.norms1 = <DTYPE_t*> self.norms1.data
             if X2 is None:
                 self.params.cosine.norms2 = self.params.cosine.norms1
             else:
-                self.norms2 = compute_norms(X2)
+                self.norms2 = _norms(X2)
                 self.params.cosine.norms2 = <DTYPE_t*> self.norms2.data
 
         elif self.dfunc == &correlation_distance:
             self.params.correlation.precomputed_data = 1
-            self.precentered_data1 = X1 - X1.mean(1)[:, None]
-            self.norms1 = compute_norms(self.precentered_data1)
+            self.precentered_data1 = _centered(X1)
+            self.norms1 = _norms(self.precentered_data1)
             self.params.correlation.x1 = \
                 <DTYPE_t*> self.precentered_data1.data
             self.params.correlation.norms1 = <DTYPE_t*> self.norms1.data
@@ -873,8 +876,8 @@ cdef class DistanceMetric(object):
                 self.params.correlation.x2 = self.params.correlation.x1
                 self.params.correlation.norms2 = self.params.correlation.norms1
             else:
-                self.precentered_data2 = X2 - X2.mean(1)[:, None]
-                self.norms2 = compute_norms(self.precentered_data2)
+                self.precentered_data2 = _centered(X2)
+                self.norms2 = _norms(self.precentered_data2)
                 self.params.correlation.x2 = \
                     <DTYPE_t*> self.precentered_data2.data
                 self.params.correlation.norms2 = <DTYPE_t*> self.norms2.data

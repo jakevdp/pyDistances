@@ -15,8 +15,8 @@ VI2 = np.dot(VI.T, VI)
 
 METRIC_DICT = {'euclidean': {},
                'minkowski': dict(p=(1, 1.5, 2.0, 3.0)),
-               #'wminkowski': dict(p=(1, 1.5, 2.0),
-               #                   w=(np.random.random(DTEST),)),
+               'wminkowski': dict(p=(1, 1.5, 2.0),
+                                  w=(np.random.random(DTEST),)),
                'mahalanobis': dict(VI = (None, VI1, VI2)),
                'seuclidean': dict(V = (None, np.random.random(DTEST),)),
                'sqeuclidean': {},
@@ -25,7 +25,7 @@ METRIC_DICT = {'euclidean': {},
                'hamming': {},
                'jaccard': {},
                'chebyshev': {},
-               #'canberra': {},
+               'canberra': {},
                'braycurtis': {}}
 
 BOOL_METRIC_DICT = {'yule' : {},
@@ -36,6 +36,18 @@ BOOL_METRIC_DICT = {'yule' : {},
                     'russellrao': {},
                     'sokalmichener': {},
                     'sokalsneath': {}}
+
+def print_params(kwargs):
+    s = '('
+    for key,val in kwargs.iteritems():
+        s += key
+        s += '='
+        if type(val) == np.ndarray:
+            s += '[%s array], ' % 'x'.join(map(str,val.shape))
+        else:
+            s += '%s, ' % str(val)
+    s += ')'
+    return s
 
 def bench_cdist(m1=100, m2=100, rseed=0):
     np.random.seed(rseed)
@@ -53,11 +65,11 @@ def bench_cdist(m1=100, m2=100, rseed=0):
             Y2 = cdist(X1, X2, metric, **kwargs)
             t2 = time()
 
-            print metric, keys, vals
+            print metric, print_params(kwargs)
             if not np.allclose(Y1, Y2):
-                print " >>>>>> FAIL: results don't match"
+                print " >>>>>>>>>>>>>>>>>>>> FAIL: results don't match"
             print " - pyDistances: %.2g sec" % (t1 - t0)
-            print " - scipy: %.2g sec" % (t2 - t1)
+            print " - scipy:       %.2g sec" % (t2 - t1)
 
 
 def bench_cdist_bool(m1=100, m2=100, rseed=0):
@@ -76,11 +88,11 @@ def bench_cdist_bool(m1=100, m2=100, rseed=0):
             Y2 = cdist(X1, X2, metric, **kwargs)
             t2 = time()
 
-            print metric, keys, vals
+            print metric, print_params(kwargs)
             if not np.allclose(Y1, Y2):
-                print " >>>>>> FAIL: results don't match"
+                print " >>>>>>>>>>>>>>>>>>>> FAIL: results don't match"
             print " - pyDistances: %.2g sec" % (t1 - t0)
-            print " - scipy: %.2g sec" % (t2 - t1)
+            print " - scipy:       %.2g sec" % (t2 - t1)
 
 
 if __name__ == '__main__':
