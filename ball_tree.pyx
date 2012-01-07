@@ -5,10 +5,12 @@
 # TODO:
 #  - documentation
 #  - ensure pickling is supported (store metric names, kwargs)
+#    pickle support for DistMetric??
 #  - code cleanup, make sure all variables are declared
-#  - tests: does it work?  triangle inequality...
-#  - how to do backward compatibility with p parameter?
-#  - think about parameters computed from data: how to make them persist
+#  - tests of various metrics...  triangle inequality...
+#  - how to do best enable backward compatibility with p parameter?
+#  - double-check indexing on distance computations.  Some metrics rely on it.
+#
 #  - use Py_ssize_t where appropriate
 
 """
@@ -384,13 +386,19 @@ cdef class BallTree(object):
         # [ 0.          0.19662693  0.29473397]
     """
     cdef readonly np.ndarray data
+    cdef readonly int warning_flag
     cdef np.ndarray idx_array
     cdef np.ndarray node_centroid_arr
     cdef np.ndarray node_info_arr
     cdef ITYPE_t leaf_size
     cdef ITYPE_t n_levels
     cdef ITYPE_t n_nodes
-    cdef readonly int warning_flag
+
+    cdef DistanceMetric dist_metric
+    # TODO: define each of these functions within dist_metric instead.
+    #       then we can have a "reduced" kwarg in cdist & pdist
+    #       also reduced kwarg in ball tree query
+    #       and should provide python-level access to conversions
     cdef dist_func dfunc
     cdef dist_func reduced_dfunc
     cdef dist_params dparams
@@ -413,12 +421,13 @@ cdef class BallTree(object):
     def __init__(self, X, leaf_size=20, 
                  metric="euclidean", **kwargs):
         # distance functions, parameters, etc.
-        cdef DistanceMetric dist_metric = DistanceMetric(metric, **kwargs)
-        self.dfunc = dist_metric.dfunc
-        self.dparams = dist_metric.params
+        self.dist_metric = DistanceMetric(metric, **kwargs)
+        self.dfunc = self.dist_metric.dfunc
+        self.dparams = self.dist_metric.params
         self.reduced_dfunc = get_reduced_dfunc(self.dfunc)
         self.dist_to_reduced = get_dist_to_reduced(self.dfunc)
         self.reduced_to_dist = get_reduced_to_dist(self.dfunc)
+
         self.data = np.asarray(X, dtype=DTYPE, order='C')
         self.warning_flag = True
 
@@ -431,6 +440,10 @@ cdef class BallTree(object):
         if leaf_size < 1:
             raise ValueError("leaf_size must be greater than or equal to 1")
         self.leaf_size = leaf_size
+
+        # set up dist_metric if needed
+        if self.dist_metric.learn_params_from_data:
+            self.dist_metric.set_params_from_data(self.data)
 
         cdef ITYPE_t n_samples = self.data.shape[0]
         cdef ITYPE_t n_features = self.data.shape[1]

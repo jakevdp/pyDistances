@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 cimport numpy as np
 cimport cython
@@ -20,6 +22,7 @@ DTYPE = np.float64
 #   - use blas for computations where appropriate
 #   - boolean functions are slow: how do we access fast C boolean operations?
 #   - use @cython.cdivision(True) where applicable
+#   - enable fast euclidean distances using (x-y)^2 = x^2 + y^2 - 2xy
 #
 #  Memory & storage:
 #   - make cdist/pdist work with fortran arrays (see note below)
@@ -62,7 +65,18 @@ cdef np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
 
     # in future cython versions, this should work
     #return np.asarray(<double[:n]> x)
-    return PyArray_SimpleNewFromData(1, &n, DTYPECODE, <void*>x)
+
+    # this Segfaults. That's not good.
+    #return PyArray_SimpleNewFromData(1, &n, DTYPECODE, <void*>x)
+    
+    # copying the buffer.  slow, but it works as a placeholder.
+    cdef Py_ssize_t i
+    cdef np.ndarray y = np.empty(n, dtype=DTYPE)
+    cdef DTYPE_t* ydata = <DTYPE_t*>y.data
+    for i from 0 <= i < n:
+        ydata[i] = x[i]
+    return y
+        
 
 
 ###############################################################################
@@ -961,6 +975,67 @@ cdef class DistanceMetric(object):
         else:
             raise ValueError('unrecognized metric %s' % metric)
 
+    def set_params_from_data(self, X1, X2 = None, persist=True):
+        """Set internal parameters from data
+
+        Some distance metrics require extra information, which can be
+        learned from the data matrices.  This function sets those
+        internal parameters
+
+        Parameters
+        ----------
+        X1 : array-like
+        X2 : array-like (optional, default = None)
+        persist : bool (optional, default = True)
+            if False, the parameters will be recomputed on the new data
+            each time another distance measurement is performed.
+            if True, the parameters will persist for all future distance
+            computations
+        """
+        if persist:
+            self.learn_params_from_data = False
+
+        X1 = np.asarray(X1)
+        if X2 is not None:
+            X2 = np.asarray(X2)
+
+        if ((self.dfunc == &mahalanobis_distance)
+            or (self.dfunc == &sqmahalanobis_distance)):
+            # compute covariance matrix from data
+            if X2 is None:
+                X = X1
+            else:
+                X = np.vstack((X1, X2))
+
+            V = np.cov(X.T)
+
+            if X.shape[0] < X.shape[1]:
+                warnings.warn('Mahalanobis Distance: singular covariance '
+                              'matrix.  Using pseudo-inverse')
+                self.mahalanobis_VI = np.linalg.pinv(V).T
+            else:
+                self.mahalanobis_VI = np.linalg.inv(V).T
+
+            self.work_buffer = np.zeros(V.shape[0])
+            self.params.mahalanobis.n = V.shape[0]
+            self.params.mahalanobis.VI = \
+                <DTYPE_t*>self.mahalanobis_VI.data
+            self.params.mahalanobis.work_buffer = \
+                <DTYPE_t*>self.work_buffer.data
+
+        elif ((self.dfunc == &seuclidean_distance)
+              or (self.dfunc == &sqseuclidean_distance)):
+            # compute variance from data
+            if X2 is None:
+                X = X1
+            else:
+                X = np.vstack((X1, X2))
+
+            self.seuclidean_V = X.var(axis=0, ddof=1)
+            self.params.seuclidean.V = <DTYPE_t*> self.seuclidean_V.data
+            self.params.seuclidean.n = self.seuclidean_V.shape[0]
+
+
     def _check_input(self, X1, X2=None, squareform=False):
         """Internal function to check inputs and convert to appropriate form.
 
@@ -996,37 +1071,15 @@ cdef class DistanceMetric(object):
             assert X2.shape[1] == n
             m2 = X2.shape[0]
 
+        if self.learn_params_from_data:
+            self.set_params_from_data(X1, X2, persist=False)
+
         if ((self.dfunc == &mahalanobis_distance)
             or (self.dfunc == &sqmahalanobis_distance)):
-            if self.learn_params_from_data:
-                # covariance matrix was not specified: compute it from data
-                if X2 is None:
-                    V = np.cov(X1.T)
-                else:
-                    V = np.cov(np.vstack((X1, X2)).T)
-
-                # TODO: what about singular matrices?  How to handle this?
-                self.mahalanobis_VI = np.linalg.inv(V).T
-                self.work_buffer = np.zeros(V.shape[0])
-                self.params.mahalanobis.n = n
-                self.params.mahalanobis.VI = \
-                    <DTYPE_t*>self.mahalanobis_VI.data
-                self.params.mahalanobis.work_buffer = \
-                    <DTYPE_t*>self.work_buffer.data
-                
             assert n == self.params.mahalanobis.n
 
         elif ((self.dfunc == &seuclidean_distance)
               or (self.dfunc == &sqseuclidean_distance)):
-            if self.learn_params_from_data:
-                # variance was not specified: compute it from data
-                if X2 is None:
-                    self.seuclidean_V = X1.var(axis=0, ddof=1)
-                else:
-                    self.seuclidean_V = np.vstack((X1, X2)).var(axis=0, ddof=1)
-                self.params.seuclidean.V = <DTYPE_t*> self.seuclidean_V.data
-                self.params.seuclidean.n = n
-
             assert n == self.params.seuclidean.n
 
         elif self.dfunc == &wminkowski_distance:
