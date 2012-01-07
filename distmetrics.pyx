@@ -102,6 +102,7 @@ cdef np.ndarray _buffer_to_ndarray(DTYPE_t* x, Py_ssize_t n):
 #     correlation_distance, etc.
 ###############################################################################
 
+
 cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 Py_ssize_t n, dist_params* params,
                                 Py_ssize_t rowindex1,
