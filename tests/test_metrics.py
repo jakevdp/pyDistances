@@ -1,3 +1,6 @@
+import os, sys
+sys.path.append(os.path.abspath('../'))
+
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
 from distmetrics import DistanceMetric

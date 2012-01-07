@@ -54,6 +54,23 @@ cdef union dist_params:
 ctypedef DTYPE_t (*dist_func)(DTYPE_t*, DTYPE_t*, Py_ssize_t,
                               dist_params*, Py_ssize_t, Py_ssize_t)
 
+# distance conversion function
+ctypedef DTYPE_t (*dist_conv_func)(DTYPE_t, dist_params*)
+
+###############################################################################
+# Utility routines
+
+# from a distance function, obtain the reduced distance function
+cdef dist_func get_reduced_dfunc(dist_func)
+
+# from a distance function, obtain the function to convert from
+#  a true distance measurement to its reduced form
+cdef dist_conv_func get_dist_to_reduced(dist_func)
+
+# from a distance function, obtain the function to convert from
+#  a reduced-form distance measurement to the true distance
+cdef dist_conv_func get_reduced_to_dist(dist_func)
+
 ###############################################################################
 # DistanceMetric class
 

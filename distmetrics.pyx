@@ -14,6 +14,7 @@ DTYPE = np.float64
 #  Speed:
 #   - use blas for computations where appropriate
 #   - boolean functions are slow: how do we access fast C boolean operations?
+#   - @cython.cdivision(True)
 #
 #  Memory & storage:
 #   - make cdist/pdist work with fortran arrays (see note below)
@@ -37,7 +38,7 @@ DTYPE = np.float64
 #        Py_ssize_t rowstride1, Py_ssize_t colstride1,
 #        Py_ssize_t rowstride2, Py_ssize_t colstride2,
 #        Py_ssize_t rowindex1,  Py_ssize_t rowindex2,
-#        dist_params* params)
+#        dist_paramss* params)
 #
 #  This would allow arbitrary numpy arrays to be used by the function,
 #   but would slightly slow down computation.
@@ -245,6 +246,32 @@ cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
     return sqrt(res)
 
 
+cdef DTYPE_t sqmahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
+                                    Py_ssize_t n, dist_params* params,
+                                    Py_ssize_t rowindex1,
+                                    Py_ssize_t rowindex2):
+    cdef Py_ssize_t i, j
+    cdef DTYPE_t d, res = 0
+
+    x1 += rowindex1 * n
+    x2 += rowindex2 * n
+
+    assert n == params.mahalanobis.n
+
+    # TODO: use blas here
+    for i from 0 <= i < n:
+        params.mahalanobis.work_buffer[i] = x1[i] - x2[i]
+
+    for i from 0 <= i < n:
+        d = 0
+        for j from 0 <= j < n:
+            d += (params.mahalanobis.VI[i * n + j]
+                  * params.mahalanobis.work_buffer[j])
+        res += d * params.mahalanobis.work_buffer[i]
+
+    return res
+
+
 cdef DTYPE_t seuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
                                  Py_ssize_t n, dist_params* params,
                                  Py_ssize_t rowindex1,
@@ -260,6 +287,23 @@ cdef DTYPE_t seuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
         res += d * d / params.seuclidean.V[i]
     
     return sqrt(res)
+
+
+cdef DTYPE_t sqseuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
+                                 Py_ssize_t n, dist_params* params,
+                                 Py_ssize_t rowindex1,
+                                 Py_ssize_t rowindex2):
+    cdef Py_ssize_t i
+    cdef DTYPE_t d, res = 0
+
+    x1 += rowindex1 * n
+    x2 += rowindex2 * n
+    
+    for i from 0 <= i < n:
+        d = x1[i] - x2[i]
+        res += d * d / params.seuclidean.V[i]
+    
+    return res
 
 
 cdef DTYPE_t sqeuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
@@ -575,7 +619,88 @@ cdef DTYPE_t user_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef np.ndarray y1 = _buffer_to_ndarray(x1 + rowindex1 * n, n)
     cdef np.ndarray y2 = _buffer_to_ndarray(x2 + rowindex2 * n, n)
     return (<object>(params.user.func))(y1, y2)
-           
+
+
+######################################################################
+# conversions between reduced and standard distances
+#
+# Motivation
+#  for some distances the full computation does not have to be performed
+#  in order to compare distances.  For example, with euclidean distance,
+#  to find out if x1 or x2 is closer to y, one only needs to compare
+#  sum((x1 - y) ** 2) and sum((x2 - y) ** 2).  That is, the square root
+#  does not need to be performed.  In order to take advantage of this
+#  within BallTree, we need a way of recognizing this for various metrics
+#  and converting between the distances.
+#
+
+cdef inline DTYPE_t no_conversion(DTYPE_t x, dist_params* params):
+    return x
+
+
+cdef inline DTYPE_t euclidean_from_reduced(DTYPE_t x, dist_params* params):
+    return sqrt(x)
+
+
+cdef inline DTYPE_t reduced_from_euclidean(DTYPE_t x, dist_params* params):
+    return x * x
+
+
+cdef inline DTYPE_t minkowski_from_reduced(DTYPE_t x, dist_params* params):
+    return pow(x, 1. / params.minkowski.p)
+
+
+cdef inline DTYPE_t reduced_from_minkowski(DTYPE_t x, dist_params* params):
+    return pow(x, params.minkowski.p)
+
+
+cdef inline dist_func get_reduced_dfunc(dist_func dfunc):
+    if dfunc == &euclidean_distance:
+        return &sqeuclidean_distance
+    elif dfunc == &seuclidean_distance:
+        return &sqseuclidean_distance
+    elif dfunc == &minkowski_distance:
+        return &pminkowski_distance
+    elif dfunc == &wminkowski_distance:
+        return &pwminkowski_distance
+    elif dfunc == &mahalanobis_distance:
+        return &sqmahalanobis_distance
+    else:
+        return dfunc
+
+
+cdef inline dist_conv_func get_dist_to_reduced(dist_func dfunc):
+    if dfunc == &euclidean_distance:
+        return &reduced_from_euclidean
+    elif dfunc == &seuclidean_distance:
+        return &reduced_from_euclidean
+    elif dfunc == &minkowski_distance:
+        return &reduced_from_minkowski
+    elif dfunc == &wminkowski_distance:
+        return &reduced_from_minkowski
+    elif dfunc == &mahalanobis_distance:
+        return &reduced_from_euclidean
+    else:
+        return &no_conversion
+
+
+cdef inline dist_conv_func get_reduced_to_dist(dist_func dfunc):
+    if dfunc == &euclidean_distance:
+        return &euclidean_from_reduced
+    elif dfunc == &seuclidean_distance:
+        return &euclidean_from_reduced
+    elif dfunc == &minkowski_distance:
+        return &minkowski_from_reduced
+    elif dfunc == &wminkowski_distance:
+        return &minkowski_from_reduced
+    elif dfunc == &mahalanobis_distance:
+        return &euclidean_from_reduced
+    else:
+        return &no_conversion
+
+
+###############################################################################
+# DistanceMetric class
 
 cdef class DistanceMetric(object):
     def __cinit__(self):
@@ -612,21 +737,26 @@ cdef class DistanceMetric(object):
         - Metrics designed for floating-point input:
 
           - 'euclidean' / 'l2'
+          - 'seuclidean'
           - 'manhattan' / 'cityblock' / 'l1'
           - 'chebyshev'
           - 'minkowski'
-          - 'pminkowski'
           - 'wminkowski'
-          - 'pwminkowski'
           - 'mahalanobis'
-          - 'seuclidean'
-          - 'sqeuclidean'
           - 'cosine'
           - 'correlation'
           - 'hamming'
           - 'jaccard'
           - 'canberra'
           - 'braycurtis'
+
+        - non-metrics which can be used for fast distance comparison
+
+          - 'sqeuclidean'
+          - 'sqseuclidean'
+          - 'pminkowski'
+          - 'pwminkowski'
+          - 'sqmahalanobis'
 
         - Metrics designed for boolean input:
         
@@ -732,7 +862,7 @@ cdef class DistanceMetric(object):
             self.params.minkowski.w = <DTYPE_t*>self.minkowski_w.data
             self.params.minkowski.n = self.minkowski_w.shape[0]
 
-        elif metric == "mahalanobis":
+        elif metric in ["sqmahalanobis", "mahalanobis"]:
             if VI is None:
                 self.learn_params_from_data = True
             else:
@@ -748,9 +878,13 @@ cdef class DistanceMetric(object):
                     <DTYPE_t*> self.mahalanobis_VI.data
                 self.params.mahalanobis.work_buffer = \
                     <DTYPE_t*> self.work_buffer.data
-            self.dfunc = &mahalanobis_distance
 
-        elif metric == 'seuclidean':
+            if metric == "mahalanobis":
+                self.dfunc = &mahalanobis_distance
+            else:
+                self.dfunc = &sqmahalanobis_distance
+
+        elif metric in ['seuclidean', 'sqseuclidean']:
             if V is None:
                 self.learn_params_from_data = True
             else:
@@ -759,7 +893,10 @@ cdef class DistanceMetric(object):
                 
                 self.params.seuclidean.V = <DTYPE_t*> self.seuclidean_V.data
                 self.params.seuclidean.n = self.seuclidean_V.shape[0]
-            self.dfunc = &seuclidean_distance
+            if metric == 'seuclidean':
+                self.dfunc = &seuclidean_distance
+            else:
+                self.dfunc = &sqseuclidean_distance
 
         elif metric == 'sqeuclidean':
             self.dfunc = &sqeuclidean_distance
@@ -856,7 +993,8 @@ cdef class DistanceMetric(object):
             assert X2.shape[1] == n
             m2 = X2.shape[0]
 
-        if self.dfunc == &mahalanobis_distance:
+        if ((self.dfunc == &mahalanobis_distance)
+            or (self.dfunc == &sqmahalanobis_distance)):
             if self.learn_params_from_data:
                 # covariance matrix was not specified: compute it from data
                 if X2 is None:
@@ -875,7 +1013,8 @@ cdef class DistanceMetric(object):
                 
             assert n == self.params.mahalanobis.n
 
-        elif self.dfunc == &seuclidean_distance:
+        elif ((self.dfunc == &seuclidean_distance)
+              or (self.dfunc == &sqseuclidean_distance)):
             if self.learn_params_from_data:
                 # variance was not specified: compute it from data
                 if X2 is None:
