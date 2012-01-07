@@ -76,7 +76,7 @@ def test_pdist(m=15, rseed=0):
             dist_metric = DistanceMetric(metric, **kwargs)
 
             Y1 = dist_metric.pdist(X)
-            Y2 = squareform(pdist(X, metric, **kwargs))
+            Y2 = pdist(X, metric, **kwargs)
 
             if not np.allclose(Y1, Y2):
                 print metric, keys, vals
@@ -117,13 +117,20 @@ def test_pdist_bool(m=15, rseed=0):
             dist_metric = DistanceMetric(metric, **kwargs)
 
             Y1 = dist_metric.pdist(X)
-            Y2 = squareform(pdist(X, metric, **kwargs))
+            Y2 = pdist(X, metric, **kwargs)
 
             if not np.allclose(Y1, Y2):
                 print metric, keys, vals
                 print Y1[:5, :5]
                 print Y2[:5, :5]
                 assert np.allclose(Y1, Y2)
+
+def test_pdist_squareform(m=10, d=3, rseed=0):
+    X = np.random.random((m, d))
+    dist_metric = DistanceMetric()
+    Y1 = squareform(dist_metric.pdist(X, squareform=False))
+    Y2 = dist_metric.pdist(X, squareform=True)
+    assert np.allclose(Y1, Y2)
 
 def test_user_metric(m1 = 2, m2 = 3):
     X1 = np.random.random((m1, DTEST))

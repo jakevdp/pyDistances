@@ -10,7 +10,6 @@ DTYPE = np.float64
 # TODO:
 #  Functionality:
 #   - implement within BallTree
-#   - allow compact output from pdist (similar to scipy.spatial.distance.pdist)
 #
 #  Speed:
 #   - use blas for computations where appropriate
@@ -747,7 +746,7 @@ cdef class DistanceMetric(object):
         else:
             raise ValueError('unrecognized metric %s' % metric)
 
-    def _check_input(self, X1, X2=None):
+    def _check_input(self, X1, X2=None, squareform=False):
         """Internal function to check inputs and convert to appropriate form.
 
         In addition, for some metrics this function verifies special
@@ -757,6 +756,9 @@ cdef class DistanceMetric(object):
         ----------
         X1 : array-like
         X2 : array-like (optional, default = None)
+        squareform : bool
+            specify whether Y is square form.  Used only if X2 is None
+ 
         
         Returns
         -------
@@ -840,11 +842,14 @@ cdef class DistanceMetric(object):
                     <DTYPE_t*> self.precentered_data2.data
                 self.params.correlation.norms2 = <DTYPE_t*> self.norms2.data
 
-        Y = np.empty((m1, m2), dtype=DTYPE)
-
         if X2 is None:
+            if squareform:
+                Y = np.empty((m1, m2), dtype=DTYPE)
+            else:
+                Y = np.empty(m1 * (m1 - 1) / 2, dtype=DTYPE)
             return X1, Y
         else:
+            Y = np.empty((m1, m2), dtype=DTYPE)
             return X1, X2, Y
 
     def _cleanup_after_computation(self):
@@ -881,26 +886,41 @@ cdef class DistanceMetric(object):
 
         return Y
                         
-    def pdist(self, X):
+    def pdist(self, X, squareform=False):
         """Compute the pairwise distances between each pair of vectors.
 
         Parameters
         ----------
         X : array-like, shape = (m, n)
+
+        squareform : boolean (optional)
+            if true, return the squareform of the matrix
         
         Returns
         -------
-        Y : ndarray, shape = (m, m)
-            Y[i, j] is the distance between the vectors X[i] and X[j]
-            evaluated with the appropriate distance metric.
+        Y : ndarray
+            Array of distances
+            
+            - if squareform == False (default value), then
+              Y is a 1-D array of size (m * (m - 1) / 2),
+              a compact representation of the distance matrix.
+              It can be converted to squareform using the function
+              ``scipy.spatial.distance.squareform``
+
+            - if squareform == True, then Y is of shape (m, m) and
+              Y[i, j] is the distance between the vectors X[i] and X[j]
+              evaluated with the appropriate distance metric.
 
         See Also
         --------
         scipy.spatial.distance.pdist
         """
-        X, Y = self._check_input(X)
+        X, Y = self._check_input(X, squareform=squareform)
 
-        self._pdist_c(X, Y)
+        if squareform:
+            self._pdist_c(X, Y)
+        else:
+            self._pdist_c_compact(X, Y)
 
         self._cleanup_after_computation()
 
@@ -918,7 +938,7 @@ cdef class DistanceMetric(object):
         #   X2.shape == (m2, n)
         #   Y.shape == (m1, m2)
         # this is not checked within the function.
-        cdef unsigned int i1, i2, m1, m2, n
+        cdef Py_ssize_t i1, i2, m1, m2, n
         m1 = X1.shape[0]
         m2 = X2.shape[0]
         n = X1.shape[1]
@@ -941,7 +961,7 @@ cdef class DistanceMetric(object):
         #   X.shape == (m, n)
         #   Y.shape == (m, m)
         # this is not checked within the function.
-        cdef unsigned int i1, i2, m, n
+        cdef Py_ssize_t i1, i2, m, n
         m = Y.shape[0]
         n = X.shape[1]
 
@@ -952,6 +972,29 @@ cdef class DistanceMetric(object):
             for i2 from i1 < i2 < m:
                 Y[i1, i2] = Y[i2, i1] = self.dfunc(pX, pX, n,
                                                    &self.params, i1, i2)
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void _pdist_c_compact(self,
+                               np.ndarray[DTYPE_t, ndim=2, mode='c'] X,
+                               np.ndarray[DTYPE_t, ndim=1, mode='c'] Y):
+        # pdist() workhorse.  '_c' means X is c-ordered
+        #                     '_compact' means Y is in compact form
+        # arrays are assumed to have:
+        #   X.shape == (m, n)
+        #   Y.size == m * (m - 1) / 2
+        # this is not checked within the function.
+        cdef Py_ssize_t i, i1, i2, m, n
+        m = X.shape[0]
+        n = X.shape[1]
+
+        cdef DTYPE_t* pX = <DTYPE_t*> X.data
+        i = 0
+        for i1 from 0 <= i1 < m:
+            for i2 from i1 < i2 < m:
+                Y[i] = self.dfunc(pX, pX, n,
+                                  &self.params, i1, i2)
+                i += 1
 
 
 def pairwise_distances(X1, X2=None, metric="euclidean", **kwargs):

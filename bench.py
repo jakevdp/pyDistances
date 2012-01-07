@@ -14,7 +14,8 @@ VI1 = np.dot(VI, VI.T)
 VI2 = np.dot(VI.T, VI)
 
 # create a user-defined metric
-user_metric = lambda x, y: np.dot(x[::-1], y)
+def user_metric(x, y):
+    return np.dot(x[::-1], y)
 
 METRIC_DICT = {'euclidean': {},
                'minkowski': dict(p=(1, 1.5, 2.0, 3.0)),
@@ -41,7 +42,7 @@ BOOL_METRIC_DICT = {'yule' : {},
                     'sokalmichener': {},
                     'sokalsneath': {}}
 
-def print_params(kwargs):
+def param_info(kwargs):
     s = '('
     for key,val in kwargs.iteritems():
         s += key
@@ -53,7 +54,10 @@ def print_params(kwargs):
     s += ')'
     return s
 
-def bench_cdist(m1=100, m2=100, rseed=0):
+def bench_float(m1=100, m2=100, rseed=0):
+    print 79 * '_'
+    print " real valued distance metrics"
+    print
     np.random.seed(rseed)
     X1 = np.random.random((m1, DTEST))
     X2 = np.random.random((m2, DTEST))
@@ -61,22 +65,52 @@ def bench_cdist(m1=100, m2=100, rseed=0):
         keys = argdict.keys()
         for vals in itertools.product(*argdict.values()):
             kwargs = dict(zip(keys, vals))
+            print metric, param_info(kwargs)
 
             t0 = time()
-            dist_metric = DistanceMetric(metric, **kwargs)
-            Y1 = dist_metric.cdist(X1, X2)
+            try:
+                dist_metric = DistanceMetric(metric, **kwargs)
+                Yc1 = dist_metric.cdist(X1, X2)
+            except Exception as inst:
+                print " >>>>>>>>>> error in pyDistances cdist:"
+                print "           ", inst
             t1 = time()
-            Y2 = cdist(X1, X2, metric, **kwargs)
+            try:
+                Yc2 = cdist(X1, X2, metric, **kwargs)
+            except Exception as inst:
+                print " >>>>>>>>>> error in scipy cdist:"
+                print "           ", inst
             t2 = time()
+            try:
+                dist_metric = DistanceMetric(metric, **kwargs)
+                Yp1 = dist_metric.pdist(X1)
+            except Exception as inst:
+                print " >>>>>>>>>> error in pyDistances pdist:"
+                print "           ", inst
+            t3 = time()
+            try:
+                Yp2 = pdist(X1, metric, **kwargs)
+            except Exception as inst:
+                print " >>>>>>>>>> error in scipy pdist:"
+                print "           ", inst
+            t4 = time()
 
-            print metric, print_params(kwargs)
-            if not np.allclose(Y1, Y2):
-                print " >>>>>>>>>>>>>>>>>>>> FAIL: results don't match"
-            print " - pyDistances: %.2g sec" % (t1 - t0)
-            print " - scipy:       %.2g sec" % (t2 - t1)
+            if not np.allclose(Yc1, Yc2):
+                print " >>>>>>>>>> FAIL: cdist results don't match"
+            if not np.allclose(Yp1, Yp2):
+                print " >>>>>>>>>> FAIL: pdist results don't match"
+            print " - pyDistances:  c: %.2g sec     p: %.2g sec" % (t1 - t0,
+                                                                    t3 - t2)
+            print " - scipy:        c: %.2g sec     p: %.2g sec" % (t2 - t1,
+                                                                    t4 - t3)
+
+    print ''
 
 
-def bench_cdist_bool(m1=100, m2=100, rseed=0):
+def bench_bool(m1=100, m2=100, rseed=0):
+    print 79 * '_'
+    print " boolean distance metrics"
+    print
     np.random.seed(rseed)
     X1 = (np.random.random((m1, DTEST)) > 0.5).astype(float)
     X2 = (np.random.random((m2, DTEST)) > 0.5).astype(float)
@@ -84,21 +118,48 @@ def bench_cdist_bool(m1=100, m2=100, rseed=0):
         keys = argdict.keys()
         for vals in itertools.product(*argdict.values()):
             kwargs = dict(zip(keys, vals))
+            print metric, param_info(kwargs)
 
             t0 = time()
-            dist_metric = DistanceMetric(metric, **kwargs)
-            Y1 = dist_metric.cdist(X1, X2)
+            try:
+                dist_metric = DistanceMetric(metric, **kwargs)
+                Yc1 = dist_metric.cdist(X1, X2)
+            except Exception as inst:
+                print " >>>>>>>>>> error in pyDistances cdist:"
+                print "           ", inst
             t1 = time()
-            Y2 = cdist(X1, X2, metric, **kwargs)
+            try:
+                Yc2 = cdist(X1, X2, metric, **kwargs)
+            except Exception as inst:
+                print " >>>>>>>>>> error in scipy cdist:"
+                print "           ", inst
             t2 = time()
+            try:
+                dist_metric = DistanceMetric(metric, **kwargs)
+                Yp1 = dist_metric.pdist(X1)
+            except Exception as inst:
+                print " >>>>>>>>>> error in pyDistances pdist:"
+                print "           ", inst
+            t3 = time()
+            try:
+                Yp2 = pdist(X1, metric, **kwargs)
+            except Exception as inst:
+                print " >>>>>>>>>> error in scipy pdist:"
+                print "           ", inst
+            t4 = time()
 
-            print metric, print_params(kwargs)
-            if not np.allclose(Y1, Y2):
-                print " >>>>>>>>>>>>>>>>>>>> FAIL: results don't match"
-            print " - pyDistances: %.2g sec" % (t1 - t0)
-            print " - scipy:       %.2g sec" % (t2 - t1)
+            if not np.allclose(Yc1, Yc2):
+                print " >>>>>>>>>> FAIL: cdist results don't match"
+            if not np.allclose(Yp1, Yp2):
+                print " >>>>>>>>>> FAIL: pdist results don't match"
+            print " - pyDistances:  c: %.2g sec     p: %.2g sec" % (t1 - t0,
+                                                                    t3 - t2)
+            print " - scipy:        c: %.2g sec     p: %.2g sec" % (t2 - t1,
+                                                                    t4 - t3)
+
+    print ''
 
 
 if __name__ == '__main__':
-    bench_cdist()
-    bench_cdist_bool()
+    bench_float()
+    bench_bool()

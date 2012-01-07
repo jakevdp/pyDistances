@@ -85,3 +85,7 @@ cdef class DistanceMetric(object):
     cdef void _pdist_c(self,
                        np.ndarray[DTYPE_t, ndim=2, mode='c'] X,
                        np.ndarray[DTYPE_t, ndim=2, mode='c'] Y)
+
+    cdef void _pdist_c_compact(self,
+                               np.ndarray[DTYPE_t, ndim=2, mode='c'] X,
+                               np.ndarray[DTYPE_t, ndim=1, mode='c'] Y)
