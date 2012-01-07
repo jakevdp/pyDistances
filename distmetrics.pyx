@@ -4,24 +4,27 @@ cimport cython
 
 from libc.math cimport fabs, fmax, sqrt, pow
 
+cdef extern from "arrayobject.h":
+    object PyArray_SimpleNewFromData(int nd, np.npy_intp* dims, 
+                                     int typenum, void* data)
+
 # python data types (corresponding C-types are in pxd file)
 DTYPE = np.float64
 
 # TODO:
 #  Functionality:
-#   - implement within BallTree
+#   - implement KD tree based on this
+#   - cover tree as well?
 #
 #  Speed:
 #   - use blas for computations where appropriate
 #   - boolean functions are slow: how do we access fast C boolean operations?
-#   - @cython.cdivision(True)
+#   - use @cython.cdivision(True) where applicable
 #
 #  Memory & storage:
 #   - make cdist/pdist work with fortran arrays (see note below)
 #   - make cdist/pdist work with csr matrices.  This will require writing
 #     a new form of each distance function which accepts csr input.
-#   - figure out how to wrap a memory array with a temporary numpy array
-#     (buffer_to_array function, below)
 #
 #  Documentation:
 #   - documentation of metrics
@@ -52,14 +55,14 @@ cdef np.ndarray _norms(np.ndarray X):
 cdef np.ndarray _centered(np.ndarray X):
     return X - X.mean(1).reshape((-1, 1))
 
-# TODO: figure out how to do this without copying data
-cdef np.ndarray _buffer_to_ndarray(DTYPE_t* x, Py_ssize_t n):
-    cdef np.ndarray y = np.empty(n, dtype=DTYPE)
-    cdef DTYPE_t* ydata = <DTYPE_t*> y.data
-    cdef Py_ssize_t i
-    for i from 0 <= i < n:
-        ydata[i] = x[i]
-    return y
+cdef np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
+    # Wrap a buffer with an ndarray.  Warning: this is not robust to
+    # memory errors.  In particular, if x is deallocated before
+    # the returned array goes out of scope, this could SegFault.
+
+    # in future cython versions, this should work
+    #return np.asarray(<double[:n]> x)
+    return PyArray_SimpleNewFromData(1, &n, DTYPECODE, <void*>x)
 
 
 ###############################################################################

@@ -2,6 +2,8 @@ cimport numpy as np
 
 # C data types (corresponding python types should be used in file)
 ctypedef np.float64_t DTYPE_t
+cdef enum:
+    DTYPECODE = np.NPY_FLOAT64
 
 ###############################################################################
 # Define data structures needed for distance calculations
