@@ -168,6 +168,23 @@ cdef DTYPE_t minkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
     return pow(res, 1. / params.minkowski.p)
 
 
+cdef DTYPE_t pminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
+                                 Py_ssize_t n, dist_params* params,
+                                 Py_ssize_t rowindex1,
+                                 Py_ssize_t rowindex2):
+    cdef Py_ssize_t i
+    cdef DTYPE_t d, res = 0
+
+    x1 += rowindex1 * n
+    x2 += rowindex2 * n
+
+    for i from 0 <= i < n:
+        d = fabs(x1[i] - x2[i])
+        res += pow(d, params.minkowski.p)
+
+    return res
+
+
 cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
                                  Py_ssize_t n, dist_params* params,
                                  Py_ssize_t rowindex1,
@@ -183,6 +200,23 @@ cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
         res += pow(params.minkowski.w[i] * d, params.minkowski.p)
 
     return pow(res, 1. / params.minkowski.p)
+
+
+cdef DTYPE_t pwminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
+                                  Py_ssize_t n, dist_params* params,
+                                  Py_ssize_t rowindex1,
+                                  Py_ssize_t rowindex2):
+    cdef Py_ssize_t i
+    cdef DTYPE_t d, res = 0
+
+    x1 += rowindex1 * n
+    x2 += rowindex2 * n
+    
+    for i from 0 <= i < n:
+        d = fabs(x1[i] - x2[i])
+        res += pow(params.minkowski.w[i] * d, params.minkowski.p)
+
+    return res
 
 
 cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
@@ -581,7 +615,9 @@ cdef class DistanceMetric(object):
           - 'manhattan' / 'cityblock' / 'l1'
           - 'chebyshev'
           - 'minkowski'
+          - 'pminkowski'
           - 'wminkowski'
+          - 'pwminkowski'
           - 'mahalanobis'
           - 'seuclidean'
           - 'sqeuclidean'
@@ -638,14 +674,53 @@ cdef class DistanceMetric(object):
                 self.dfunc = &minkowski_distance
                 self.params.minkowski.p = p
 
+        elif metric == "pminkowski":
+            if p == None:
+                raise ValueError("For metric = 'pminkowski', "
+                                 "parameter p must be specified.")
+            elif p <= 0:
+                raise ValueError("For metric = 'pminkowski', "
+                                 "parameter p must be greater than 0.")
+            elif p == 1:
+                self.dfunc = &manhattan_distance
+
+            elif p == 2:
+                self.dfunc = &sqeuclidean_distance
+
+            elif p == np.inf:
+                self.dfunc = &chebyshev_distance
+
+            else:
+                self.dfunc = &pminkowski_distance
+                self.params.minkowski.p = p
+
         elif metric == "wminkowski":
             self.dfunc = &wminkowski_distance
 
             if p == None:
-                raise ValueError("For metric = 'minkowski', "
+                raise ValueError("For metric = 'wminkowski', "
                                  "parameter p must be specified.")
             elif p <= 0:
-                raise ValueError("For metric = 'minkowski', "
+                raise ValueError("For metric = 'wminkowski', "
+                                 "parameter p must be greater than 0.")
+            self.params.minkowski.p = p
+
+            if w is None:
+                raise ValueError("For metric = 'wminkowski', "
+                                 "parameter w must be specified.")
+            self.minkowski_w = np.asarray(w, dtype=DTYPE, order='C')
+            assert self.minkowski_w.ndim == 1
+            self.params.minkowski.w = <DTYPE_t*>self.minkowski_w.data
+            self.params.minkowski.n = self.minkowski_w.shape[0]
+
+        elif metric == "pwminkowski":
+            self.dfunc = &pwminkowski_distance
+
+            if p == None:
+                raise ValueError("For metric = 'pwminkowski', "
+                                 "parameter p must be specified.")
+            elif p <= 0:
+                raise ValueError("For metric = 'pwminkowski', "
                                  "parameter p must be greater than 0.")
             self.params.minkowski.p = p
 
@@ -813,6 +888,9 @@ cdef class DistanceMetric(object):
             assert n == self.params.seuclidean.n
 
         elif self.dfunc == &wminkowski_distance:
+            assert n == self.params.minkowski.n
+
+        elif self.dfunc == &pwminkowski_distance:
             assert n == self.params.minkowski.n
 
         elif self.dfunc == &cosine_distance:
