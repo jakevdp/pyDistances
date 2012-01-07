@@ -9,6 +9,7 @@ from libc.math cimport fabs, fmax, sqrt, pow
 cdef extern from "arrayobject.h":
     object PyArray_SimpleNewFromData(int nd, np.npy_intp* dims, 
                                      int typenum, void* data)
+np.import_array()  # required in order to use C-API
 
 # python data types (corresponding C-types are in pxd file)
 DTYPE = np.float64
@@ -23,6 +24,7 @@ DTYPE = np.float64
 #   - boolean functions are slow: how do we access fast C boolean operations?
 #   - use @cython.cdivision(True) where applicable
 #   - enable fast euclidean distances using (x-y)^2 = x^2 + y^2 - 2xy
+#     and 'precomputed norms' flag
 #
 #  Memory & storage:
 #   - make cdist/pdist work with fortran arrays (see note below)
@@ -58,24 +60,17 @@ cdef np.ndarray _norms(np.ndarray X):
 cdef np.ndarray _centered(np.ndarray X):
     return X - X.mean(1).reshape((-1, 1))
 
-cdef np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
-    # Wrap a buffer with an ndarray.  Warning: this is not robust to
-    # memory errors.  In particular, if x is deallocated before
-    # the returned array goes out of scope, this could SegFault.
+cdef inline np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
+    # Wrap a memory buffer with an ndarray.  Warning: this is not robust.
+    # In particular, if x is deallocated before the returned array goes
+    # out of scope, this could SegFault.
 
-    # in future cython versions, this should work
-    #return np.asarray(<double[:n]> x)
+    # if we know what n is beforehand, we can simply call
+    # (in newer cython versions)
+    #return np.asarray(<double[:100]> x)
 
-    # this Segfaults. That's not good.
-    #return PyArray_SimpleNewFromData(1, &n, DTYPECODE, <void*>x)
-    
-    # copying the buffer.  slow, but it works as a placeholder.
-    cdef Py_ssize_t i
-    cdef np.ndarray y = np.empty(n, dtype=DTYPE)
-    cdef DTYPE_t* ydata = <DTYPE_t*>y.data
-    for i from 0 <= i < n:
-        ydata[i] = x[i]
-    return y
+    # Note: this Segfaults unless np.import_array() is called above
+    return PyArray_SimpleNewFromData(1, &n, DTYPECODE, <void*>x)
         
 
 

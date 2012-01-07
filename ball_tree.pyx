@@ -10,7 +10,8 @@
 #  - tests of various metrics...  triangle inequality...
 #  - how to do best enable backward compatibility with p parameter?
 #  - double-check indexing on distance computations.  Some metrics rely on it.
-#
+#    for some distance calculation, we'll have to turn off "precomputed norms"
+#    flags temporarily before the calculation.
 #  - use Py_ssize_t where appropriate
 
 """

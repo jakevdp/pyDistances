@@ -22,6 +22,10 @@ VI2 = np.dot(VI.T, VI)
 # note that wminkowski and canberra fail in scipy.spacial.cdist/pdist
 #  in scipy <= 0.8
 
+# create a user-defined metric
+def user_metric(x, y):
+    return np.dot(x[::-1], y)
+
 METRIC_DICT = {'euclidean': {},
                'minkowski': dict(p=(1, 1.5, 2.0, 3.0)),
                #'wminkowski': dict(p=(1, 1.5, 2.0),
@@ -35,7 +39,8 @@ METRIC_DICT = {'euclidean': {},
                'jaccard': {},
                'chebyshev': {},
                #'canberra': {},
-               'braycurtis': {}}
+               'braycurtis': {},
+               user_metric: {}}
 
 BOOL_METRIC_DICT = {'yule' : {},
                     'matching' : {},
