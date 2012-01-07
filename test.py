@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
 from distmetrics import DistanceMetric
+from brute_neighbors import brute_force_neighbors
+from sklearn.neighbors import NearestNeighbors
 import itertools
 
 # dimension for the tests
@@ -134,6 +136,18 @@ def test_user_metric(m1 = 2, m2 = 3):
     res2 = cdist(X1, X2, f)
 
     assert np.allclose(res1, res2)
+
+
+def test_brute_neighbors(n1=10, n2=20, m=5, k=5, rseed=0):
+    X = np.random.random((n1, m))
+    Y = np.random.random((n2, m))
+
+    nbrs = NearestNeighbors(k).fit(Y)
+    ind1 = nbrs.kneighbors(X, return_distance=False)
+
+    ind2 = brute_force_neighbors(X, Y, k)
+
+    assert np.all(ind1 == ind2)
 
 
 if __name__ == '__main__':

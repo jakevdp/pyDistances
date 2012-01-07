@@ -9,12 +9,20 @@ from distutils.core import setup
 from distutils.extension import Extension
 from Cython.Distutils import build_ext
 
-ext = Extension("distmetrics",
-                ["distmetrics.pyx"]
-                )
+distmetrics = Extension("distmetrics",
+                        ["distmetrics.pyx"])
+
+brute_neighbors = Extension("brute_neighbors",
+                            ["brute_neighbors.pyx"])
 
 setup(cmdclass = {'build_ext': build_ext},
       name='distmetrics',
       version='1.0',
-      ext_modules=[ext],
+      ext_modules=[distmetrics],
+      )
+
+setup(cmdclass = {'build_ext': build_ext},
+      name='brute_neighbors',
+      version='1.0',
+      ext_modules=[brute_neighbors],
       )
