@@ -1,3 +1,5 @@
 *~
 *.so
 *.c
+build
+*.pyc

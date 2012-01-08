@@ -8,6 +8,8 @@ from brute_neighbors import brute_force_neighbors
 from sklearn.neighbors import NearestNeighbors
 import itertools
 
+import cPickle
+
 # dimension for the tests
 DTEST = 10
 
@@ -163,6 +165,20 @@ def test_brute_neighbors(n1=10, n2=20, m=5, k=5, rseed=0):
     ind2 = brute_force_neighbors(X, Y, k)
 
     assert np.all(ind1 == ind2)
+
+def test_pickle(n=5, d=3):
+    X = np.random.random((n, d))
+    VI = np.random.random((d, d))
+    VI = np.dot(VI, VI.T)
+    
+    dm = DistanceMetric('mahalanobis', VI=VI)
+    dist = dm.pdist(X)
+    
+    for protocol in (0, 1, 2):
+        s = cPickle.dumps(dm)
+        dm2 = cPickle.loads(s)
+
+        assert np.allclose(dist, dm2.pdist(X))
 
 
 if __name__ == '__main__':

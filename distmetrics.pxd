@@ -5,7 +5,6 @@ ctypedef np.float64_t DTYPE_t
 cdef enum:
     DTYPECODE = np.NPY_FLOAT64
 
-
 ###############################################################################
 # Define data structures needed for distance calculations
 
@@ -68,6 +67,10 @@ ctypedef DTYPE_t (*dist_conv_func)(DTYPE_t, dist_params*)
 # DistanceMetric class
 
 cdef class DistanceMetric(object):
+    # initialization information
+    cdef object metric
+    cdef object init_kwargs
+
     # C attributes: information about and access to distance functions
     cdef dist_params params
     cdef dist_func dfunc

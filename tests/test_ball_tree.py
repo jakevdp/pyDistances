@@ -9,6 +9,8 @@ from distmetrics import DistanceMetric
 from scipy.spatial import cKDTree
 from sklearn import neighbors
 
+import cPickle
+
 
 def test_ball_tree_query():
     X = np.random.random(size=(100, 5))
@@ -92,17 +94,16 @@ def test_ball_tree_query_radius_distance(n_samples=100, n_features=10):
         assert_array_almost_equal(d, dist)
 
 
-#def test_ball_tree_pickle():
-#    import pickle
-#    X = np.random.random(size=(10, 3))
-#    bt1 = BallTree(X, leaf_size=1)
-#    ind1, dist1 = bt1.query(X)
-#    for protocol in (0, 1, 2):
-#        s = pickle.dumps(bt1, protocol=protocol)
-#        bt2 = pickle.loads(s)
-#        ind2, dist2 = bt2.query(X)
-#        assert np.all(ind1 == ind2)
-#        assert_array_almost_equal(dist1, dist2)
+def test_ball_tree_pickle():
+    X = np.random.random(size=(10, 3))
+    bt1 = BallTree(X, leaf_size=1)
+    ind1, dist1 = bt1.query(X)
+    for protocol in (0, 1, 2):
+        s = cPickle.dumps(bt1, protocol=protocol)
+        bt2 = cPickle.loads(s)
+        ind2, dist2 = bt2.query(X)
+        assert np.all(ind1 == ind2)
+        assert_array_almost_equal(dist1, dist2)
 
 
 if __name__ == '__main__':

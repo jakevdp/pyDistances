@@ -6,6 +6,9 @@ cimport cython
 
 from libc.math cimport fabs, fmax, sqrt, pow
 
+cdef extern from "stdlib.h":
+    int strcmp(char *a, char *b)
+
 cdef extern from "arrayobject.h":
     object PyArray_SimpleNewFromData(int nd, np.npy_intp* dims, 
                                      int typenum, void* data)
@@ -28,9 +31,6 @@ DTYPE = np.float64
 #  Documentation:
 #   - documentation of metrics
 #   - double-check consistency with sklearn.metrics & scipy.spatial.distance
-#
-#  Templating?
-#   - this would be a great candidate to try out cython templating
 #
 #  Future Functionality:
 #   - make cdist/pdist work with fortran arrays (see note below)
@@ -73,7 +73,6 @@ cdef inline np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
 
     # Note: this Segfaults unless np.import_array() is called above
     return PyArray_SimpleNewFromData(1, &n, DTYPECODE, <void*>x)
-        
 
 
 ###############################################################################
@@ -713,6 +712,13 @@ cdef inline dist_conv_func get_reduced_to_dist(dist_func dfunc):
         return &no_conversion
 
 
+######################################################################
+# newObj function
+#  this is a helper function for pickling
+def newObj(obj):
+    return obj.__new__(obj)
+
+
 ###############################################################################
 # DistanceMetric class
 
@@ -787,6 +793,11 @@ cdef class DistanceMetric(object):
         :class:`distance_metrics`.
 
         """
+        self.metric = metric
+        self.init_kwargs = dict(V=V, VI=VI, p=p, w=w)
+        self._init_metric(metric, **self.init_kwargs)
+
+    def _init_metric(self, metric, V, VI, p, w):
         self.learn_params_from_data = False
 
         if metric in ["euclidean", 'l2', None]:
@@ -976,6 +987,26 @@ cdef class DistanceMetric(object):
         self.dist_to_reduced = get_dist_to_reduced(self.dfunc)
         self.reduced_to_dist = get_reduced_to_dist(self.dfunc)
 
+    def __reduce__(self):
+        """
+        reduce method used for pickling
+        """
+        return (newObj, (DistanceMetric,), self.__getstate__())
+
+    def __getstate__(self):
+        """
+        get state for pickling
+        """
+        return (self.metric, self.init_kwargs)
+
+    def __setstate__(self, state):
+        """
+        set state for pickling
+        """
+        self.metric = state[0]
+        self.init_kwargs = state[1]
+        self._init_metric(state[0], **(state[1]))
+
     def set_params_from_data(self, X1, X2 = None, persist=True):
         """Set internal parameters from data
 
@@ -1036,7 +1067,6 @@ cdef class DistanceMetric(object):
             self.params.seuclidean.V = <DTYPE_t*> self.seuclidean_V.data
             self.params.seuclidean.n = self.seuclidean_V.shape[0]
 
-    
     def precompute_params_from_data(self, X1, X2=None):
         """Precompute parameters for faster distance computation
 

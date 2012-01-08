@@ -7,9 +7,6 @@
 #
 #  - how to do best enable backward compatibility with p parameter?
 #
-#  - ensure pickling is supported (store metric names, kwargs)
-#    pickle support for DistMetric??
-#
 #  - code cleanup, make sure all variables are declared
 #
 #  - tests of various metrics...  triangle inequality...
@@ -466,7 +463,8 @@ cdef class BallTree(object):
                 self.node_info_arr,
                 self.leaf_size,
                 self.n_levels,
-                self.n_nodes)
+                self.n_nodes,
+                self.dm)
 
     def __setstate__(self, state):
         """
@@ -476,9 +474,10 @@ cdef class BallTree(object):
         self.idx_array = state[1]
         self.node_centroid_arr = state[2]
         self.node_info_arr = state[3]
-        self.leaf_size = state[5]
-        self.n_levels = state[6]
-        self.n_nodes = state[7]
+        self.leaf_size = state[4]
+        self.n_levels = state[5]
+        self.n_nodes = state[6]
+        self.dm = state[7]
 
     def query(self, X, k=1, return_distance=True):
         """
