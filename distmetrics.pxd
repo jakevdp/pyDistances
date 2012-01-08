@@ -5,6 +5,7 @@ ctypedef np.float64_t DTYPE_t
 cdef enum:
     DTYPECODE = np.NPY_FLOAT64
 
+
 ###############################################################################
 # Define data structures needed for distance calculations
 
@@ -52,50 +53,44 @@ cdef union dist_params:
     correlation_info correlation
     user_info user
 
+###############################################################################
+# Function pointer types
+
 # define a pointer to a generic distance function.
 ctypedef DTYPE_t (*dist_func)(DTYPE_t*, DTYPE_t*, Py_ssize_t,
                               dist_params*, Py_ssize_t, Py_ssize_t)
 
-# distance conversion function
+# pointer to a generic distance conversion function
 ctypedef DTYPE_t (*dist_conv_func)(DTYPE_t, dist_params*)
 
-###############################################################################
-# Utility routines
-
-# from a distance function, obtain the reduced distance function
-cdef dist_func get_reduced_dfunc(dist_func)
-
-# from a distance function, obtain the function to convert from
-#  a true distance measurement to its reduced form
-cdef dist_conv_func get_dist_to_reduced(dist_func)
-
-# from a distance function, obtain the function to convert from
-#  a reduced-form distance measurement to the true distance
-cdef dist_conv_func get_reduced_to_dist(dist_func)
 
 ###############################################################################
 # DistanceMetric class
 
 cdef class DistanceMetric(object):
-    # C attributes which store information about the distance function
+    # C attributes: information about and access to distance functions
     cdef dist_params params
     cdef dist_func dfunc
+    cdef dist_func reduced_dfunc
+    cdef dist_conv_func dist_to_reduced
+    cdef dist_conv_func reduced_to_dist
 
     # array attributes used for various distance measures
     # note: some of these could be combined for a smaller memory footprint,
     #       but for clarity in reading the code we use separate objects.
-    cdef np.ndarray mahalanobis_VI     # inverse covariance matrix of data
-    cdef np.ndarray seuclidean_V       # variance array of data
-    cdef np.ndarray minkowski_w        # weights for weighted minkowski
-    cdef np.ndarray norms1             # precomputed norms, used for cosine
-    cdef np.ndarray norms2             #  and correlation distances
-    cdef np.ndarray precentered_data1  # pre-centered data, used for
-    cdef np.ndarray precentered_data2  #  correlation distance
-    cdef np.ndarray work_buffer        # work buffer
+    cdef np.ndarray mahalanobis_VI     # - inverse covariance matrix of data
+    cdef np.ndarray seuclidean_V       # - variance array of data
+    cdef np.ndarray minkowski_w        # - weights for weighted minkowski
+    cdef np.ndarray norms1             # - precomputed norms, used for cosine
+    cdef np.ndarray norms2             #   and correlation distances
+    cdef np.ndarray precentered_data1  # - pre-centered data, used for
+    cdef np.ndarray precentered_data2  #   correlation distance
+    cdef np.ndarray work_buffer        # - work buffer
 
-    # flags for computation
+    # flag for computation
     cdef int learn_params_from_data
 
+    # workhorse routines for efficient distance computation
     cdef void _cdist_cc(self,
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] X1,
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] X2,

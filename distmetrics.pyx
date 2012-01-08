@@ -16,8 +16,7 @@ DTYPE = np.float64
 
 # TODO:
 #  Functionality:
-#   - implement KD tree based on this
-#   - cover tree as well?
+#   - add `override_precomputed` flag on distance functions
 #
 #  Speed:
 #   - use blas for computations where appropriate
@@ -26,17 +25,20 @@ DTYPE = np.float64
 #   - enable fast euclidean distances using (x-y)^2 = x^2 + y^2 - 2xy
 #     and 'precomputed norms' flag
 #
-#  Memory & storage:
-#   - make cdist/pdist work with fortran arrays (see note below)
-#   - make cdist/pdist work with csr matrices.  This will require writing
-#     a new form of each distance function which accepts csr input.
-#
 #  Documentation:
 #   - documentation of metrics
 #   - double-check consistency with sklearn.metrics & scipy.spatial.distance
 #
 #  Templating?
 #   - this would be a great candidate to try out cython templating
+#
+#  Future Functionality:
+#   - make cdist/pdist work with fortran arrays (see note below)
+#   - make cdist/pdist work with csr matrices.  This will require writing
+#     a new form of each distance function which accepts csr input.
+#   - implement KD tree based on this (?)
+#   - cover tree as well (?)
+#   - templating?  this would be a great candidate to try out cython templates.
 #
 
 # One idea:
@@ -46,7 +48,7 @@ DTYPE = np.float64
 #        Py_ssize_t rowstride1, Py_ssize_t colstride1,
 #        Py_ssize_t rowstride2, Py_ssize_t colstride2,
 #        Py_ssize_t rowindex1,  Py_ssize_t rowindex2,
-#        dist_paramss* params)
+#        dist_params* params)
 #
 #  This would allow arbitrary numpy arrays to be used by the function,
 #   but would slightly slow down computation.
@@ -970,6 +972,10 @@ cdef class DistanceMetric(object):
         else:
             raise ValueError('unrecognized metric %s' % metric)
 
+        self.reduced_dfunc = get_reduced_dfunc(self.dfunc)
+        self.dist_to_reduced = get_dist_to_reduced(self.dfunc)
+        self.reduced_to_dist = get_reduced_to_dist(self.dfunc)
+
     def set_params_from_data(self, X1, X2 = None, persist=True):
         """Set internal parameters from data
 
@@ -1030,6 +1036,46 @@ cdef class DistanceMetric(object):
             self.params.seuclidean.V = <DTYPE_t*> self.seuclidean_V.data
             self.params.seuclidean.n = self.seuclidean_V.shape[0]
 
+    
+    def precompute_params_from_data(self, X1, X2=None):
+        """Precompute parameters for faster distance computation
+
+        Parameters
+        ----------
+        X1 : array-like
+        X2 : array-like (optional, default = None)
+        """
+        X1 = np.asarray(X1, dtype=DTYPE, order='C')
+        if X2 is not None:
+            X2 = np.asarray(X2, dtype=DTYPE, order='C')
+
+        if self.dfunc == &cosine_distance:
+            self.params.cosine.precomputed_norms = 1
+            self.norms1 = _norms(X1)
+            self.params.cosine.norms1 = <DTYPE_t*> self.norms1.data
+            if X2 is None:
+                self.params.cosine.norms2 = self.params.cosine.norms1
+            else:
+                self.norms2 = _norms(X2)
+                self.params.cosine.norms2 = <DTYPE_t*> self.norms2.data
+
+        elif self.dfunc == &correlation_distance:
+            self.params.correlation.precomputed_data = 1
+            self.precentered_data1 = _centered(X1)
+            self.norms1 = _norms(self.precentered_data1)
+            self.params.correlation.x1 = \
+                <DTYPE_t*> self.precentered_data1.data
+            self.params.correlation.norms1 = <DTYPE_t*> self.norms1.data
+            if X2 is None:
+                self.params.correlation.x2 = self.params.correlation.x1
+                self.params.correlation.norms2 = self.params.correlation.norms1
+            else:
+                self.precentered_data2 = _centered(X2)
+                self.norms2 = _norms(self.precentered_data2)
+                self.params.correlation.x2 = \
+                    <DTYPE_t*> self.precentered_data2.data
+                self.params.correlation.norms2 = <DTYPE_t*> self.norms2.data
+
 
     def _check_input(self, X1, X2=None, squareform=False):
         """Internal function to check inputs and convert to appropriate form.
@@ -1069,6 +1115,9 @@ cdef class DistanceMetric(object):
         if self.learn_params_from_data:
             self.set_params_from_data(X1, X2, persist=False)
 
+        self.precompute_params_from_data(X1, X2)
+
+        # check that data matches metric
         if ((self.dfunc == &mahalanobis_distance)
             or (self.dfunc == &sqmahalanobis_distance)):
             assert n == self.params.mahalanobis.n
@@ -1093,23 +1142,7 @@ cdef class DistanceMetric(object):
                 self.norms2 = _norms(X2)
                 self.params.cosine.norms2 = <DTYPE_t*> self.norms2.data
 
-        elif self.dfunc == &correlation_distance:
-            self.params.correlation.precomputed_data = 1
-            self.precentered_data1 = _centered(X1)
-            self.norms1 = _norms(self.precentered_data1)
-            self.params.correlation.x1 = \
-                <DTYPE_t*> self.precentered_data1.data
-            self.params.correlation.norms1 = <DTYPE_t*> self.norms1.data
-            if X2 is None:
-                self.params.correlation.x2 = self.params.correlation.x1
-                self.params.correlation.norms2 = self.params.correlation.norms1
-            else:
-                self.precentered_data2 = _centered(X2)
-                self.norms2 = _norms(self.precentered_data2)
-                self.params.correlation.x2 = \
-                    <DTYPE_t*> self.precentered_data2.data
-                self.params.correlation.norms2 = <DTYPE_t*> self.norms2.data
-
+        # construct matrix Y
         if X2 is None:
             if squareform:
                 Y = np.empty((m1, m2), dtype=DTYPE)
