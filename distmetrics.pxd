@@ -8,36 +8,34 @@ cdef enum:
 ###############################################################################
 # Define data structures needed for distance calculations
 
-# data structure used for mahalanobis distance
 cdef struct mahalanobis_info:
     Py_ssize_t n          # size of arrays
     DTYPE_t* VI           # pointer to buffer of size n * n
     DTYPE_t* work_buffer  # pointer to buffer of size n
 
-# data structure used for (weighted) minkowski distance
 cdef struct minkowski_info:
     Py_ssize_t n  # size of array
     DTYPE_t p     # specifies p-norm
     DTYPE_t* w    # pointer to buffer of size n
 
-# data structure used for standardized euclidean distance
+cdef struct euclidean_info:
+    int precomputed_norms         # flag to record whether data is precomputed
+    DTYPE_t *sqnorms1, *sqnorms2  # precomputed squared-norms of vectors
+
 cdef struct seuclidean_info:
     Py_ssize_t n   # size of array
     DTYPE_t* V     # pointer to buffer of size n
 
-# data structure used for cosine distance
 cdef struct cosine_info:
     int precomputed_norms    # flag to record whether norms are precomputed
     DTYPE_t *norms1, *norms2 # precomputed norms of vectors
 
-# data structure used for correlation distance
 cdef struct correlation_info:
     int precomputed_data      # flag to record whether data is pre-centered
                               #  and norms are pre-computed
     DTYPE_t *x1, *x2          # precentered data vectors
     DTYPE_t *norms1, *norms2  # precomputed norms of vectors
 
-# data structure for user-defined metric
 cdef struct user_info:
     void* func
 
@@ -47,6 +45,7 @@ cdef struct user_info:
 cdef union dist_params:
     minkowski_info minkowski
     mahalanobis_info mahalanobis
+    euclidean_info euclidean
     seuclidean_info seuclidean
     cosine_info cosine
     correlation_info correlation
