@@ -96,6 +96,26 @@ def test_pdist(m=15, rseed=0):
                 assert np.allclose(Y1, Y2)
 
 
+def test_pdist_square(m=15, rseed=0):
+    """Compare DistanceMetric.pdist to scipy.spatial.distance.pdist"""
+    np.random.seed(rseed)
+    X = np.random.random((m, DTEST))
+    for (metric, argdict) in METRIC_DICT.iteritems():
+        keys = argdict.keys()
+        for vals in itertools.product(*argdict.values()):
+            kwargs = dict(zip(keys, vals))
+            dist_metric = DistanceMetric(metric, **kwargs)
+
+            Y1 = dist_metric.pdist(X, squareform=True)
+            Y2 = squareform(pdist(X, metric, **kwargs))
+
+            if not np.allclose(Y1, Y2):
+                print metric, keys, vals
+                print Y1[:5, :5]
+                print Y2[:5, :5]
+                assert np.allclose(Y1, Y2)
+
+
 def test_cdist_bool(m1=15, m2=20, rseed=0):
     """Compare DistanceMetric.cdist to scipy.spatial.distance.cdist"""
     np.random.seed(rseed)

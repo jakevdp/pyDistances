@@ -762,9 +762,9 @@ cdef class BallTree(object):
         radius = 0
         for i from node_info.idx_start <= i < node_info.idx_end:
             radius = fmax(radius,
-                          self.dm.reduced_dfunc(centroid, data, n_features,
-                                                &self.dm.params,
-                                                0, idx_array[i]))
+                          self.dm.reduced_dfunc(
+                    centroid, data + n_features * idx_array[i],
+                    n_features, &self.dm.params, -1, -1))
         node_info.radius = self.dm.reduced_to_dist(radius, &self.dm.params)
 
         # check if this is a leaf
@@ -843,10 +843,9 @@ cdef class BallTree(object):
                 radius = 0
                 for i from idx_start <= i < idx_end:
                     radius = fmax(radius,
-                                  self.dm.reduced_dfunc(centroid, data,
-                                                        n_features,
-                                                        &self.dm.params, 0,
-                                                        idx_array[i]))
+                                  self.dm.reduced_dfunc(
+                        centroid, data + n_features * idx_array[i],
+                        n_features, &self.dm.params, -1, -1))
                 node_info.radius = self.dm.reduced_to_dist(radius,
                                                            &self.dm.params)
 
@@ -936,9 +935,9 @@ cdef class BallTree(object):
             # Case 2: this is a leaf node.  Update set of nearby points
             elif node_info.is_leaf:
                 for i from node_info.idx_start <= i < node_info.idx_end:
-                    dist_pt = self.dm.reduced_dfunc(pt, data, n_features,
-                                                    &self.dm.params, 0,
-                                                    idx_array[i])
+                    dist_pt = self.dm.reduced_dfunc(
+                        pt, data + n_features * idx_array[i], n_features,
+                        &self.dm.params, -1, -1)
 
                     dmax = heapqueue_largest(near_set_dist, k)
 
@@ -1016,8 +1015,9 @@ cdef class BallTree(object):
             i_node = item.i_node
             node_info = node_info_arr + i_node
 
-            dist_pt = self.dm.dfunc(pt, node_centroid_arr, n_features,
-                                    &self.dm.params, 0, i_node)
+            dist_pt = self.dm.dfunc(
+                            pt, node_centroid_arr + n_features * i_node,
+                            n_features, &self.dm.params, -1, -1)
 
             #------------------------------------------------------------
             # Case 1: all node points are outside distance r.
@@ -1036,9 +1036,9 @@ cdef class BallTree(object):
             #         determine if they fall within radius
             elif node_info.is_leaf:
                 for i from node_info.idx_start <= i < node_info.idx_end:
-                    dist_pt = self.dm.reduced_dfunc(pt, data, n_features,
-                                                    &self.dm.params,
-                                                    0, idx_array[i])
+                    dist_pt = self.dm.reduced_dfunc(
+                            pt, data + n_features * idx_array[i],
+                            n_features, &self.dm.params, -1, -1)
                     if dist_pt <= reduced_r:
                         count += 1
 
@@ -1079,8 +1079,9 @@ cdef class BallTree(object):
             i_node = item.i_node
             node_info = node_info_arr + i_node
 
-            dist_pt = self.dm.dfunc(pt, node_centroid_arr, n_features,
-                                    &self.dm.params, 0, i_node)
+            dist_pt = self.dm.dfunc(pt,
+                                    node_centroid_arr + n_features * i_node,
+                                    n_features, &self.dm.params, -1, -1)
 
             #------------------------------------------------------------
             # Case 1: all node points are outside distance r.
@@ -1101,9 +1102,9 @@ cdef class BallTree(object):
             #         determine if they fall within radius
             elif node_info.is_leaf:
                 for i from node_info.idx_start <= i < node_info.idx_end:
-                    dist_pt = self.dm.reduced_dfunc(pt, data, n_features,
-                                                    &self.dm.params, 0,
-                                                    idx_array[i])
+                    dist_pt = self.dm.reduced_dfunc(
+                            pt, data + n_features * idx_array[i], n_features,
+                            &self.dm.params, -1, -1)
                     if dist_pt <= reduced_r:
                         indices[idx_i] = idx_array[i]
                         idx_i += 1
@@ -1146,8 +1147,9 @@ cdef class BallTree(object):
             i_node = item.i_node
             node_info = node_info_arr + i_node
 
-            dist_pt = self.dm.dfunc(pt, node_centroid_arr, n_features,
-                                    &self.dm.params, 0, i_node)
+            dist_pt = self.dm.dfunc(pt,
+                                    node_centroid_arr + n_features * i_node,
+                                    n_features, &self.dm.params, -1, -1)
 
             #------------------------------------------------------------
             # Case 1: all node points are outside distance r.
@@ -1160,8 +1162,9 @@ cdef class BallTree(object):
             #         add all points
             elif dist_pt + node_info.radius < r:
                 for i from node_info.idx_start <= i < node_info.idx_end:
-                    dist_pt = self.dm.dfunc(pt, data, n_features,
-                                            &self.dm.params, 0, idx_array[i])
+                    dist_pt = self.dm.dfunc(pt,
+                                            data + n_features * idx_array[i],
+                                            n_features, &self.dm.params, -1, -1)
                     indices[idx_i] = idx_array[i]
                     distances[idx_i] = dist_pt
                     idx_i += 1
@@ -1171,9 +1174,9 @@ cdef class BallTree(object):
             #         determine if they fall within radius
             elif node_info.is_leaf:
                 for i from node_info.idx_start <= i < node_info.idx_end:
-                    dist_pt = self.dm.reduced_dfunc(pt, data, n_features,
-                                                    &self.dm.params, 0,
-                                                    idx_array[i])
+                    dist_pt = self.dm.reduced_dfunc(
+                            pt, data + n_features * idx_array[i],
+                            n_features, &self.dm.params, -1, -1)
                     if dist_pt <= reduced_r:
                         indices[idx_i] = idx_array[i]
                         distances[idx_i] = self.dm.reduced_to_dist(
@@ -1202,7 +1205,7 @@ cdef class BallTree(object):
                                      ITYPE_t n_features):
         return fmax(
             0, (self.dm.dfunc(pt, centroid, n_features,
-                              &self.dm.params, 0, 0)
+                              &self.dm.params, -1, -1)
                 - radius))
 
     cdef inline DTYPE_t calc_reduced_dist_LB(BallTree self,
@@ -1212,7 +1215,7 @@ cdef class BallTree(object):
                                              ITYPE_t n_features):
         return self.dm.dist_to_reduced(
             fmax(0, (self.dm.dfunc(pt, centroid, n_features,
-                                   &self.dm.params, 0, 0)
+                                   &self.dm.params, -1, -1)
                      - radius)),
             &self.dm.params)
 

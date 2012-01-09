@@ -87,32 +87,21 @@ cdef inline np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
 #     Parameters
 #     ----------
 #     x1, x2 : double*
-#         pointers to data arrays (see notes below)
+#         pointers to data arrays
 #     n : integer
-#         length of vector (see notes below)
+#         length of vector
 #     params : structure
 #         the parameter structure contains various parameters that define
 #         the distance metric, or aid in faster computation.
 #     rowindex1, rowindex2 : integers
-#         these define the offsets where the data starts (see notes below)
+#         these define the offsets for precomputed values
+#         if either is negative, then no precomputed value will be used.
 #    
 #     Returns
 #     -------
 #     D : double
 #         distance between v1 and v2
-#    
-#     Notes
-#     -----
-#     the data in the vectors v1 and v2 are defined by the following 
-#     locations in memory:
 #
-#     - v1 = x1[n * row_offset1 : (n + 1) * rowindex1]
-#     - v2 = x2[n * row_offset2 : (n + 1) * rowindex2]
-#
-#     passing rowindex1 and rowindex2 becomes useful for metrics where
-#     computation can be made more efficient by precomputing information
-#     about each point: e.g. the mean and norm in cosine_distance and
-#     correlation_distance, etc.
 ###############################################################################
 
 
@@ -122,9 +111,6 @@ cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef DTYPE_t d, res = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
     
     for i from 0 <= i < n:
         d = x1[i] - x2[i]
@@ -139,9 +125,6 @@ cdef DTYPE_t manhattan_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef DTYPE_t res = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
     
     for i from 0 <= i < n:
         res += fabs(x1[i] - x2[i])
@@ -155,9 +138,6 @@ cdef DTYPE_t chebyshev_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef DTYPE_t res = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
     
     for i from 0 <= i < n:
         res = fmax(res, fabs(x1[i] - x2[i]))
@@ -171,9 +151,6 @@ cdef DTYPE_t minkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef DTYPE_t d, res = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
 
     for i from 0 <= i < n:
         d = fabs(x1[i] - x2[i])
@@ -189,9 +166,6 @@ cdef DTYPE_t pminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef Py_ssize_t i
     cdef DTYPE_t d, res = 0
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         d = fabs(x1[i] - x2[i])
         res += pow(d, params.minkowski.p)
@@ -205,9 +179,6 @@ cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
                                  Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef DTYPE_t d, res = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
     
     for i from 0 <= i < n:
         d = fabs(x1[i] - x2[i])
@@ -222,9 +193,6 @@ cdef DTYPE_t pwminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
                                   Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef DTYPE_t d, res = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
     
     for i from 0 <= i < n:
         d = fabs(x1[i] - x2[i])
@@ -239,9 +207,6 @@ cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
                                   Py_ssize_t rowindex2):
     cdef Py_ssize_t i, j
     cdef DTYPE_t d, res = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
 
     assert n == params.mahalanobis.n
 
@@ -266,9 +231,6 @@ cdef DTYPE_t sqmahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef Py_ssize_t i, j
     cdef DTYPE_t d, res = 0
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     assert n == params.mahalanobis.n
 
     # TODO: use blas here
@@ -291,9 +253,6 @@ cdef DTYPE_t seuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
                                  Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef DTYPE_t d, res = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
     
     for i from 0 <= i < n:
         d = x1[i] - x2[i]
@@ -308,9 +267,6 @@ cdef DTYPE_t sqseuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
                                  Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef DTYPE_t d, res = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
     
     for i from 0 <= i < n:
         d = x1[i] - x2[i]
@@ -326,9 +282,6 @@ cdef DTYPE_t sqeuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef Py_ssize_t i
     cdef DTYPE_t d, res = 0
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         d = x1[i] - x2[i]
         res += d * d
@@ -343,23 +296,35 @@ cdef DTYPE_t cosine_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef Py_ssize_t i
     cdef DTYPE_t x1nrm = 0, x2nrm = 0, x1Tx2 = 0, normalization = 0
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
+    cdef int precomputed1 = (rowindex1 >= 0)
+    cdef int precomputed2 = (rowindex2 >= 0)
 
     # TODO: use blas here
+    if params.cosine.precomputed_norms and (precomputed1 or precomputed2):
+        if precomputed1:
+            x1nrm = params.cosine.norms1[rowindex1]
+        else:
+            for i from 0 <= i < n: x1nrm += x1[i] * x1[i]
+            x1nrm = sqrt(x1nrm)
 
-    if params.cosine.precomputed_norms:
+        if precomputed2:
+            x2nrm = params.cosine.norms2[rowindex2]
+        else:
+            for i from 0 <= i < n: x2nrm += x2[i] * x2[i]
+            x2nrm = sqrt(x2nrm)
+
         for i from 0 <= i < n:
             x1Tx2 += x1[i] * x2[i]
-        x1nrm = params.cosine.norms1[rowindex1]
-        x2nrm = params.cosine.norms2[rowindex2]
+
         normalization = x1nrm * x2nrm
+    
     else:
         for i from 0 <= i < n:
             x1nrm += x1[i] * x1[i]
             x2nrm += x2[i] * x2[i]
             x1Tx2 += x1[i] * x2[i]
-        normalization = sqrt(x1nrm * x2nrm)        
+
+        normalization = sqrt(x1nrm * x2nrm)
 
     return 1.0 - (x1Tx2) / normalization
 
@@ -374,18 +339,49 @@ cdef DTYPE_t correlation_distance(DTYPE_t* x1, DTYPE_t* x2,
 
     cdef DTYPE_t tmp1, tmp2
 
+    cdef int precomputed1 = (rowindex1 >= 0)
+    cdef int precomputed2 = (rowindex2 >= 0)
+
     # TODO : use blas here
-    if params.correlation.precomputed_data:
+    if params.correlation.precomputed_data and precomputed1 and precomputed2:
         x1 = params.correlation.x1 + rowindex1 * n
         x2 = params.correlation.x2 + rowindex2 * n
+
         for i from 0 <= i < n:
             x1Tx2 += x1[i] * x2[i]
-        
-        normalization = params.correlation.norms1[rowindex1] 
+
+        normalization = params.correlation.norms1[rowindex1]
         normalization *= params.correlation.norms2[rowindex2]
+
+    elif params.correlation.precomputed_data and precomputed1:
+        x1 = params.correlation.x1 + rowindex1 * n
+        for i from 0 <= i < n:
+            mu2 += x2[i]
+        mu2 /= n
+
+        for i from 0 <= i < n:
+            tmp2 = x2[i] - mu2
+            x2nrm += tmp2 * tmp2
+            x1Tx2 += x1[i] * tmp2
+
+        normalization = params.correlation.norms1[rowindex1]
+        normalization *= sqrt(x2nrm)
+
+    elif params.correlation.precomputed_data and precomputed2:
+        x2 = params.correlation.x2 + rowindex2 * n
+        for i from 0 <= i < n:
+            mu1 += x1[i]
+        mu1 /= n
+
+        for i from 0 <= i < n:
+            tmp1 = x1[i] - mu1
+            x1nrm += tmp1 * tmp1
+            x1Tx2 += tmp1 * x2[i]
+
+        normalization = params.correlation.norms2[rowindex2]
+        normalization *= sqrt(x1nrm)
+
     else:
-        x1 += rowindex1 * n
-        x2 += rowindex2 * n
         for i from 0 <= i < n:
             mu1 += x1[i]
             mu2 += x2[i]
@@ -397,7 +393,7 @@ cdef DTYPE_t correlation_distance(DTYPE_t* x1, DTYPE_t* x2,
             tmp2 = x2[i] - mu2
             x1nrm += tmp1 * tmp1
             x2nrm += tmp2 * tmp2
-            x1Tx2 += tmp1 * tmp2
+            x1Tx2 += tmp1 * x2[i]
 
         normalization = sqrt(x1nrm * x2nrm)
 
@@ -411,9 +407,6 @@ cdef DTYPE_t hamming_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef Py_ssize_t i
     cdef int n_disagree = 0
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         n_disagree += (x1[i] != x2[i])
 
@@ -426,9 +419,6 @@ cdef DTYPE_t jaccard_distance(DTYPE_t* x1, DTYPE_t* x2,
                               Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef int n_disagree = 0
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
 
     for i from 0 <= i < n:
         if x1[i] != 0:
@@ -446,9 +436,6 @@ cdef DTYPE_t canberra_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef DTYPE_t res = 0, denominator
     cdef Py_ssize_t i
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         denominator = (fabs(x1[i]) + fabs(x2[i]))
         if denominator > 0:
@@ -464,9 +451,6 @@ cdef DTYPE_t braycurtis_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef Py_ssize_t i
     cdef DTYPE_t numerator = 0, denominator = 0
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         numerator += fabs(x1[i] - x2[i])
         denominator += fabs(x1[i])
@@ -481,9 +465,6 @@ cdef DTYPE_t yule_distance(DTYPE_t* x1, DTYPE_t* x2,
                            Py_ssize_t rowindex2):
     cdef int TF1, TF2, ntt = 0, nff = 0, ntf = 0, nft = 0
     cdef Py_ssize_t i
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
@@ -503,9 +484,6 @@ cdef DTYPE_t matching_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef int TF1, TF2, n_neq = 0
     cdef Py_ssize_t i
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
@@ -520,9 +498,6 @@ cdef DTYPE_t dice_distance(DTYPE_t* x1, DTYPE_t* x2,
                            Py_ssize_t rowindex2):
     cdef int TF1, TF2, ntt = 0, n_neq = 0
     cdef Py_ssize_t i
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
@@ -540,9 +515,6 @@ cdef DTYPE_t kulsinski_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef int TF1, TF2, ntt = 0, n_neq = 0
     cdef Py_ssize_t i
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
@@ -559,9 +531,6 @@ cdef DTYPE_t rogerstanimoto_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef int TF1, TF2, n_neq = 0
     cdef Py_ssize_t i
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
@@ -576,9 +545,6 @@ cdef DTYPE_t russellrao_distance(DTYPE_t* x1, DTYPE_t* x2,
                                  Py_ssize_t rowindex2):
     cdef int TF1, TF2, ntt = 0
     cdef Py_ssize_t i
-
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
@@ -595,9 +561,6 @@ cdef DTYPE_t sokalmichener_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef int TF1, TF2, n_neq = 0
     cdef Py_ssize_t i
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
@@ -613,9 +576,6 @@ cdef DTYPE_t sokalsneath_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef int TF1, TF2, ntt = 0, n_neq = 0
     cdef Py_ssize_t i
 
-    x1 += rowindex1 * n
-    x2 += rowindex2 * n
-
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
@@ -629,8 +589,8 @@ cdef DTYPE_t user_distance(DTYPE_t* x1, DTYPE_t* x2,
                            Py_ssize_t n, dist_params* params,
                            Py_ssize_t rowindex1,
                            Py_ssize_t rowindex2):
-    cdef np.ndarray y1 = _buffer_to_ndarray(x1 + rowindex1 * n, n)
-    cdef np.ndarray y2 = _buffer_to_ndarray(x2 + rowindex2 * n, n)
+    cdef np.ndarray y1 = _buffer_to_ndarray(x1, n)
+    cdef np.ndarray y2 = _buffer_to_ndarray(x2, n)
     return (<object>(params.user.func))(y1, y2)
 
 
@@ -1278,9 +1238,13 @@ cdef class DistanceMetric(object):
         cdef DTYPE_t* pX2 = <DTYPE_t*> X2.data
 
         for i1 from 0 <= i1 < m1:
+            pX2 = <DTYPE_t*> X2.data
             for i2 from 0 <= i2 < m2:
-                Y[i1, i2] = self.dfunc(pX1, pX2, n,
+                Y[i1, i2] = self.dfunc(pX1,
+                                       pX2, n,
                                        &self.params, i1, i2)
+                pX2 += n
+            pX1 += n
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -1296,13 +1260,18 @@ cdef class DistanceMetric(object):
         m = Y.shape[0]
         n = X.shape[1]
 
-        cdef DTYPE_t* pX = <DTYPE_t*> X.data
+        cdef DTYPE_t* pX1 = <DTYPE_t*> X.data
+        cdef DTYPE_t* pX2 = <DTYPE_t*> X.data
 
         for i1 from 0 <= i1 < m:
             Y[i1, i1] = 0
+            pX2 = pX1 + n
             for i2 from i1 < i2 < m:
-                Y[i1, i2] = Y[i2, i1] = self.dfunc(pX, pX, n,
+                Y[i1, i2] = Y[i2, i1] = self.dfunc(pX1,
+                                                   pX2, n,
                                                    &self.params, i1, i2)
+                pX2 += n
+            pX1 += n
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -1319,13 +1288,17 @@ cdef class DistanceMetric(object):
         m = X.shape[0]
         n = X.shape[1]
 
-        cdef DTYPE_t* pX = <DTYPE_t*> X.data
+        cdef DTYPE_t* pX1 = <DTYPE_t*> X.data
+        cdef DTYPE_t* pX2 = <DTYPE_t*> X.data
         i = 0
         for i1 from 0 <= i1 < m:
+            pX2 = pX1 + n
             for i2 from i1 < i2 < m:
-                Y[i] = self.dfunc(pX, pX, n,
+                Y[i] = self.dfunc(pX1, pX2, n,
                                   &self.params, i1, i2)
+                pX2 += n
                 i += 1
+            pX1 += n
 
 
 def pairwise_distances(X1, X2=None, metric="euclidean", **kwargs):
