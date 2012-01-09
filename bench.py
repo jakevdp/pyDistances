@@ -18,6 +18,7 @@ def user_metric(x, y):
     return np.dot(x[::-1], y)
 
 METRIC_DICT = {'euclidean': {},
+               'cityblock': {},
                'minkowski': dict(p=(1, 1.5, 2.0, 3.0)),
                'wminkowski': dict(p=(1, 1.5, 2.0),
                                   w=(np.random.random(DTEST),)),
@@ -54,7 +55,7 @@ def param_info(kwargs):
     s += ')'
     return s
 
-def bench_float(m1=100, m2=100, rseed=0):
+def bench_float(m1=200, m2=200, rseed=0):
     print 79 * '_'
     print " real valued distance metrics"
     print
@@ -99,15 +100,15 @@ def bench_float(m1=100, m2=100, rseed=0):
                 print " >>>>>>>>>> FAIL: cdist results don't match"
             if not np.allclose(Yp1, Yp2):
                 print " >>>>>>>>>> FAIL: pdist results don't match"
-            print " - pyDistances:  c: %.2g sec     p: %.2g sec" % (t1 - t0,
+            print " - pyDistances:  c: %.4f sec     p: %.4f sec" % (t1 - t0,
                                                                     t3 - t2)
-            print " - scipy:        c: %.2g sec     p: %.2g sec" % (t2 - t1,
+            print " - scipy:        c: %.4f sec     p: %.4f sec" % (t2 - t1,
                                                                     t4 - t3)
 
     print ''
 
 
-def bench_bool(m1=100, m2=100, rseed=0):
+def bench_bool(m1=200, m2=200, rseed=0):
     print 79 * '_'
     print " boolean distance metrics"
     print
@@ -152,9 +153,9 @@ def bench_bool(m1=100, m2=100, rseed=0):
                 print " >>>>>>>>>> FAIL: cdist results don't match"
             if not np.allclose(Yp1, Yp2):
                 print " >>>>>>>>>> FAIL: pdist results don't match"
-            print " - pyDistances:  c: %.2g sec     p: %.2g sec" % (t1 - t0,
+            print " - pyDistances:  c: %.4f sec     p: %.4f sec" % (t1 - t0,
                                                                     t3 - t2)
-            print " - scipy:        c: %.2g sec     p: %.2g sec" % (t2 - t1,
+            print " - scipy:        c: %.4f sec     p: %.4f sec" % (t2 - t1,
                                                                     t4 - t3)
 
     print ''

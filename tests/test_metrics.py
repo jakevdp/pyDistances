@@ -29,6 +29,7 @@ def user_metric(x, y):
     return np.dot(x[::-1], y)
 
 METRIC_DICT = {'euclidean': {},
+               'cityblock': {},
                'minkowski': dict(p=(1, 1.5, 2.0, 3.0)),
                #'wminkowski': dict(p=(1, 1.5, 2.0),
                #                   w=(np.random.random(DTEST),)),
