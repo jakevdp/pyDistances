@@ -111,32 +111,10 @@ cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 Py_ssize_t rowindex2):
     cdef Py_ssize_t i
     cdef DTYPE_t d, res = 0
-    cdef int precomputed1 = (rowindex1 >= 0)
-    cdef int precomputed2 = (rowindex2 >= 0)
 
-    if params.euclidean.precomputed_norms and precomputed1 and precomputed2:
-        for i from 0 <= i < n:
-            res += x1[i] * x2[i]
-        res = fmax(params.euclidean.sqnorms1[rowindex1]
-                   + params.euclidean.sqnorms2[rowindex2]
-                   - res - res, 0)
-
-    elif params.euclidean.precomputed_norms and precomputed1:
-        for i from 0 <= i < n:
-            res += x2[i] * (x2[i] - x1[i] - x1[i])
-        res = fmax(params.euclidean.sqnorms1[rowindex1]
-                   + res, 0)
-
-    elif params.euclidean.precomputed_norms and precomputed2:
-        for i from 0 <= i < n:
-            res += x1[i] * (x1[i] - x2[i] - x2[i])
-        res = fmax(params.euclidean.sqnorms2[rowindex2]
-                   + res, 0)
-
-    else:
-        for i from 0 <= i < n:
-            d = x1[i] - x2[i]
-            res += d * d
+    for i from 0 <= i < n:
+        d = x1[i] - x2[i]
+        res += d * d
     
     return sqrt(res)
 
@@ -322,23 +300,12 @@ cdef DTYPE_t cosine_distance(DTYPE_t* x1, DTYPE_t* x2,
     cdef int precomputed2 = (rowindex2 >= 0)
 
     # TODO: use blas here
-    if params.cosine.precomputed_norms and (precomputed1 or precomputed2):
-        if precomputed1:
-            x1nrm = params.cosine.norms1[rowindex1]
-        else:
-            for i from 0 <= i < n: x1nrm += x1[i] * x1[i]
-            x1nrm = sqrt(x1nrm)
-
-        if precomputed2:
-            x2nrm = params.cosine.norms2[rowindex2]
-        else:
-            for i from 0 <= i < n: x2nrm += x2[i] * x2[i]
-            x2nrm = sqrt(x2nrm)
-
+    if params.cosine.precomputed_norms and precomputed1 and precomputed2:
         for i from 0 <= i < n:
             x1Tx2 += x1[i] * x2[i]
 
-        normalization = x1nrm * x2nrm
+        normalization = params.cosine.norms1[rowindex1]
+        normalization *= params.cosine.norms2[rowindex2]
     
     else:
         for i from 0 <= i < n:
@@ -374,34 +341,6 @@ cdef DTYPE_t correlation_distance(DTYPE_t* x1, DTYPE_t* x2,
 
         normalization = params.correlation.norms1[rowindex1]
         normalization *= params.correlation.norms2[rowindex2]
-
-    elif params.correlation.precomputed_data and precomputed1:
-        x1 = params.correlation.x1 + rowindex1 * n
-        for i from 0 <= i < n:
-            mu2 += x2[i]
-        mu2 /= n
-
-        for i from 0 <= i < n:
-            tmp2 = x2[i] - mu2
-            x2nrm += tmp2 * tmp2
-            x1Tx2 += x1[i] * tmp2
-
-        normalization = params.correlation.norms1[rowindex1]
-        normalization *= sqrt(x2nrm)
-
-    elif params.correlation.precomputed_data and precomputed2:
-        x2 = params.correlation.x2 + rowindex2 * n
-        for i from 0 <= i < n:
-            mu1 += x1[i]
-        mu1 /= n
-
-        for i from 0 <= i < n:
-            tmp1 = x1[i] - mu1
-            x1nrm += tmp1 * tmp1
-            x1Tx2 += tmp1 * x2[i]
-
-        normalization = params.correlation.norms2[rowindex2]
-        normalization *= sqrt(x1nrm)
 
     else:
         for i from 0 <= i < n:
@@ -783,7 +722,6 @@ cdef class DistanceMetric(object):
         self.learn_params_from_data = False
 
         if metric in ["euclidean", 'l2', None]:
-            self.params.euclidean.precomputed_norms = 0
             self.dfunc = &euclidean_distance
 
         elif metric in ("manhattan", "cityblock", "l1"):
@@ -1061,16 +999,6 @@ cdef class DistanceMetric(object):
         X1 = np.asarray(X1, dtype=DTYPE, order='C')
         if X2 is not None:
             X2 = np.asarray(X2, dtype=DTYPE, order='C')
-
-        if self.dfunc == &euclidean_distance:
-            self.params.euclidean.precomputed_norms = 1
-            self.norms1 = (X1 ** 2).sum(1)
-            self.params.euclidean.sqnorms1 = <DTYPE_t*> self.norms1.data
-            if X2 is None:
-                self.params.euclidean.sqnorms2 = self.params.euclidean.sqnorms1
-            else:
-                self.norms2 = (X2 ** 2).sum(1)
-                self.params.euclidean.sqnorms2 = <DTYPE_t*> self.norms2.data
 
         if self.dfunc == &cosine_distance:
             self.params.cosine.precomputed_norms = 1
