@@ -38,14 +38,14 @@ METRIC_DICT = {'euclidean': {},
                'sqeuclidean': {},
                'cosine': {},
                'correlation': {},
-               'hamming': {},
-               'jaccard': {},
                'chebyshev': {},
                #'canberra': {},
                'braycurtis': {},
                user_metric: {}}
 
-BOOL_METRIC_DICT = {'yule' : {},
+BOOL_METRIC_DICT = {'hamming': {},
+                    'jaccard': {},
+                    'yule' : {},
                     'matching' : {},
                     'dice': {},
                     'kulsinski': {},
@@ -91,8 +91,6 @@ def test_pdist(m=15, rseed=0):
 
             if not np.allclose(Y1, Y2):
                 print metric, keys, vals
-                print Y1[:5, :5]
-                print Y2[:5, :5]
                 assert np.allclose(Y1, Y2)
 
 
@@ -111,8 +109,6 @@ def test_pdist_square(m=15, rseed=0):
 
             if not np.allclose(Y1, Y2):
                 print metric, keys, vals
-                print Y1[:5, :5]
-                print Y2[:5, :5]
                 assert np.allclose(Y1, Y2)
 
 
@@ -152,8 +148,6 @@ def test_pdist_bool(m=15, rseed=0):
 
             if not np.allclose(Y1, Y2):
                 print metric, keys, vals
-                print Y1[:5, :5]
-                print Y2[:5, :5]
                 assert np.allclose(Y1, Y2)
 
 def test_pdist_squareform(m=10, d=3, rseed=0):

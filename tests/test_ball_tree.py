@@ -8,8 +8,53 @@ from distmetrics import DistanceMetric
 
 from scipy.spatial import cKDTree
 from sklearn import neighbors
+import itertools
 
 import cPickle
+
+# dimension for the tests
+DTEST = 10
+
+# create some inverse covariance matrices for mahalanobis
+VI = np.random.random((DTEST, DTEST))
+VI1 = np.dot(VI, VI.T)
+VI2 = np.dot(VI.T, VI)
+
+# For each distance metric, specify a dictionary of ancillary parameters
+#  and a sequence of values to test.
+#
+# note that wminkowski and canberra fail in scipy.spacial.cdist/pdist
+#  in scipy <= 0.8
+
+# create a user-defined metric
+def user_metric(x, y):
+    return abs(x - y).sum()
+
+METRIC_DICT = {'euclidean': {},
+               'cityblock': {},
+               'minkowski': dict(p=(1, 1.5, 2.0, 3.0)),
+               'wminkowski': dict(p=(1, 1.5, 2.0),
+                                  w=(np.random.random(DTEST),)),
+               'mahalanobis': dict(VI = (None, VI1, VI2)),
+               'seuclidean': dict(V = (None, np.random.random(DTEST),)),
+               'cosine': {},
+               #'correlation': {},
+               #'hamming': {},
+               'chebyshev': {},
+               'canberra': {},
+               'braycurtis': {},
+               user_metric: {}}
+
+BOOL_METRIC_DICT = {'yule' : {},
+                    'matching' : {},
+                    'hamming' : {},
+                    'jaccard' : {},
+                    'dice': {},
+                    'kulsinski': {},
+                    'rogerstanimoto': {},
+                    'russellrao': {},
+                    'sokalmichener': {},
+                    'sokalsneath': {}}
 
 
 def test_ball_tree_query():
@@ -23,6 +68,52 @@ def test_ball_tree_query():
         dist_kd, ind_kd = kdt.query(X, k=k)
 
         assert_array_almost_equal(dist_bt, dist_kd)
+
+def test_ball_tree_metrics_float():
+    X = np.random.random(size=(100, DTEST))
+    k = 5
+    
+    for (metric, argdict) in METRIC_DICT.iteritems():
+        keys = argdict.keys()
+        for vals in itertools.product(*argdict.values()):
+            kwargs = dict(zip(keys, vals))
+            bt = BallTree(X, metric=metric, **kwargs)
+            dist_bt, ind_bt = bt.query(X, k=k)
+
+            dm = DistanceMetric(metric=metric, **kwargs)
+            D = dm.pdist(X, squareform=True)
+            ind_dm = np.argsort(D, 1)[:, :k]
+            dist_dm = D[np.arange(X.shape[0])[:, None], ind_dm]
+
+            try:
+                assert_array_almost_equal(dist_bt, dist_dm)
+            except:
+                print metric, kwargs
+                assert_array_almost_equal(dist_bt, dist_dm)
+
+def test_ball_tree_metrics_bool():
+    X = (np.random.random(size=(10, 10)) >= 0.5).astype(float)
+    Y = (np.random.random(size=(10, 10)) >= 0.5).astype(float)
+    k = 1
+    
+    for (metric, argdict) in BOOL_METRIC_DICT.iteritems():
+        keys = argdict.keys()
+        for vals in itertools.product(*argdict.values()):
+            kwargs = dict(zip(keys, vals))
+            bt = BallTree(X, metric=metric, **kwargs)
+            dist_bt, ind_bt = bt.query(Y, k=k)
+
+            dm = DistanceMetric(metric=metric, **kwargs)
+            D = dm.cdist(Y, X)
+
+            ind_dm = np.argsort(D, 1)[:, :k]
+            dist_dm = D[np.arange(Y.shape[0])[:, None], ind_dm]
+
+            try:
+                assert_array_almost_equal(dist_bt, dist_dm)
+            except:
+                print metric, kwargs
+                assert_array_almost_equal(dist_bt, dist_dm)
 
 
 def test_ball_tree_p_distance():

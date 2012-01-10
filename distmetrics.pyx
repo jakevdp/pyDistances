@@ -354,7 +354,7 @@ cdef DTYPE_t correlation_distance(DTYPE_t* x1, DTYPE_t* x2,
             tmp2 = x2[i] - mu2
             x1nrm += tmp1 * tmp1
             x2nrm += tmp2 * tmp2
-            x1Tx2 += tmp1 * x2[i]
+            x1Tx2 += tmp1 * tmp2
 
         normalization = sqrt(x1nrm * x2nrm)
 
@@ -379,15 +379,15 @@ cdef DTYPE_t jaccard_distance(DTYPE_t* x1, DTYPE_t* x2,
                               Py_ssize_t rowindex1,
                               Py_ssize_t rowindex2):
     cdef Py_ssize_t i
-    cdef int n_disagree = 0
+    cdef int num = 0, denom = 0
 
     for i from 0 <= i < n:
-        if x1[i] != 0:
-            if x2[i] != 0:
-                if (x1[i] != x2[i]):
-                    n_disagree += 1
+        if (x1[i] != x2[i]) and (x1[i] != 0 or x2[i] != 0):
+            num += 1
+        if x1[i] != 0 or x2[i] != 0:
+            denom += 1
 
-    return n_disagree * 1. / n
+    return num * 1. / denom
 
 
 cdef DTYPE_t canberra_distance(DTYPE_t* x1, DTYPE_t* x2,
@@ -419,7 +419,7 @@ cdef DTYPE_t braycurtis_distance(DTYPE_t* x1, DTYPE_t* x2,
 
     return numerator / denominator
 
-
+@cython.cdivision(True)
 cdef DTYPE_t yule_distance(DTYPE_t* x1, DTYPE_t* x2,
                            Py_ssize_t n, dist_params* params,
                            Py_ssize_t rowindex1,

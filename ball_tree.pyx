@@ -11,11 +11,8 @@
 #
 #  - tests of various metrics...  triangle inequality...
 #
-#  - ** double-check indexing on distance computations.  Some metrics rely
-#    on it.  For some distance calculations, we'll have to turn off
-#    "precomputed norms" flags temporarily before the calculation.
-#
-#  - use Py_ssize_t where appropriate
+#  - currently all metrics are used without precomputed values.  This should
+#    be addressed.
 #
 
 """
@@ -302,6 +299,14 @@ cdef inline stack_item stack_pop(stack* self):
 def newObj(obj):
     return obj.__new__(obj)
 
+######################################################################
+# Invalid metrics
+#
+# These are not true metrics (they don't satisfy the triangle inequality)
+# so BallTree will not work with them
+INVALID_METRICS = ['sqeuclidean', 'correlation', 'pminkowski',
+                   'pwminkowski', 'sqseuclidean', 'sqmahalanobis']
+
 
 ######################################################################
 # BallTree class
@@ -412,6 +417,9 @@ cdef class BallTree(object):
 
     def __init__(self, X, leaf_size=20, 
                  metric="euclidean", **kwargs):
+        if metric in INVALID_METRICS:
+            raise ValueError("metric %s does not satisfy the triangle "
+                             "inequality: BallTree cannot be used")
         self.data = np.asarray(X, dtype=DTYPE, order='C')
         self.warning_flag = True
 
