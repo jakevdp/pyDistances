@@ -50,8 +50,8 @@ cdef union dist_params:
 # Function pointer types
 
 # define a pointer to a generic distance function.
-ctypedef DTYPE_t (*dist_func)(DTYPE_t*, DTYPE_t*, Py_ssize_t,
-                              dist_params*, Py_ssize_t, Py_ssize_t)
+ctypedef DTYPE_t (*dist_func)(DTYPE_t*, DTYPE_t*, int,
+                              dist_params*, int, int)
 
 # pointer to a generic distance conversion function
 ctypedef DTYPE_t (*dist_conv_func)(DTYPE_t, dist_params*)

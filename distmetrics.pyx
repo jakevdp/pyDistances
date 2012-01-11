@@ -24,7 +24,6 @@ DTYPE = np.float64
 #  Speed:
 #   - use blas for computations where appropriate
 #   - boolean functions are slow: how do we access fast C boolean operations?
-#   - use @cython.cdivision(True) where applicable
 #   - enable fast euclidean distances using (x-y)^2 = x^2 + y^2 - 2xy
 #     and 'precomputed norms' flag
 #
@@ -44,10 +43,10 @@ DTYPE = np.float64
 # One idea:
 #  to save on memory, we could define general distance functions with
 #   the signature
-#  dfunc(DTYPE_t* x1, DTYPE_t* x2, Py_ssize_t n,
-#        Py_ssize_t rowstride1, Py_ssize_t colstride1,
-#        Py_ssize_t rowstride2, Py_ssize_t colstride2,
-#        Py_ssize_t rowindex1,  Py_ssize_t rowindex2,
+#  dfunc(DTYPE_t* x1, DTYPE_t* x2, int n,
+#        int rowstride1, int colstride1,
+#        int rowstride2, int colstride2,
+#        int rowindex1,  int rowindex2,
 #        dist_params* params)
 #
 #  This would allow arbitrary numpy arrays to be used by the function,
@@ -80,9 +79,9 @@ cdef inline np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
 #
 # Distance functions have the following call signature
 #
-# distance(DTYPE_t* x1, DTYPE_t* x1, Py_ssize_t n,
+# distance(DTYPE_t* x1, DTYPE_t* x1, int n,
 #          dist_params* params,
-#          Py_ssize_t rowindex1, Py_ssize_t rowindex2)
+#          int rowindex1, int rowindex2)
 #
 #     Parameters
 #     ----------
@@ -106,10 +105,10 @@ cdef inline np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
 
 
 cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                Py_ssize_t n, dist_params* params,
-                                Py_ssize_t rowindex1,
-                                Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                int n, dist_params* params,
+                                int rowindex1,
+                                int rowindex2):
+    cdef int i
     cdef DTYPE_t d, res = 0
 
     for i from 0 <= i < n:
@@ -120,10 +119,10 @@ cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
 
 
 cdef DTYPE_t manhattan_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                Py_ssize_t n, dist_params* params,
-                                Py_ssize_t rowindex1,
-                                Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                int n, dist_params* params,
+                                int rowindex1,
+                                int rowindex2):
+    cdef int i
     cdef DTYPE_t res = 0
     
     for i from 0 <= i < n:
@@ -133,10 +132,10 @@ cdef DTYPE_t manhattan_distance(DTYPE_t* x1, DTYPE_t* x2,
 
 
 cdef DTYPE_t chebyshev_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                Py_ssize_t n, dist_params* params,
-                                Py_ssize_t rowindex1,
-                                Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                int n, dist_params* params,
+                                int rowindex1,
+                                int rowindex2):
+    cdef int i
     cdef DTYPE_t res = 0
     
     for i from 0 <= i < n:
@@ -145,11 +144,12 @@ cdef DTYPE_t chebyshev_distance(DTYPE_t* x1, DTYPE_t* x2,
     return res
 
 
+@cython.cdivision(True)
 cdef DTYPE_t minkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                Py_ssize_t n, dist_params* params,
-                                Py_ssize_t rowindex1,
-                                Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                int n, dist_params* params,
+                                int rowindex1,
+                                int rowindex2):
+    cdef int i
     cdef DTYPE_t d, res = 0
 
     for i from 0 <= i < n:
@@ -160,10 +160,10 @@ cdef DTYPE_t minkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
 
 
 cdef DTYPE_t pminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 Py_ssize_t n, dist_params* params,
-                                 Py_ssize_t rowindex1,
-                                 Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                 int n, dist_params* params,
+                                 int rowindex1,
+                                 int rowindex2):
+    cdef int i
     cdef DTYPE_t d, res = 0
 
     for i from 0 <= i < n:
@@ -173,11 +173,12 @@ cdef DTYPE_t pminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
     return res
 
 
+@cython.cdivision(True)
 cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 Py_ssize_t n, dist_params* params,
-                                 Py_ssize_t rowindex1,
-                                 Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                 int n, dist_params* params,
+                                 int rowindex1,
+                                 int rowindex2):
+    cdef int i
     cdef DTYPE_t d, res = 0
     
     for i from 0 <= i < n:
@@ -188,10 +189,10 @@ cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
 
 
 cdef DTYPE_t pwminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  Py_ssize_t n, dist_params* params,
-                                  Py_ssize_t rowindex1,
-                                  Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                  int n, dist_params* params,
+                                  int rowindex1,
+                                  int rowindex2):
+    cdef int i
     cdef DTYPE_t d, res = 0
     
     for i from 0 <= i < n:
@@ -202,10 +203,10 @@ cdef DTYPE_t pwminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
 
 
 cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  Py_ssize_t n, dist_params* params,
-                                  Py_ssize_t rowindex1,
-                                  Py_ssize_t rowindex2):
-    cdef Py_ssize_t i, j
+                                  int n, dist_params* params,
+                                  int rowindex1,
+                                  int rowindex2):
+    cdef int i, j
     cdef DTYPE_t d, res = 0
 
     assert n == params.mahalanobis.n
@@ -225,10 +226,10 @@ cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
 
 
 cdef DTYPE_t sqmahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                    Py_ssize_t n, dist_params* params,
-                                    Py_ssize_t rowindex1,
-                                    Py_ssize_t rowindex2):
-    cdef Py_ssize_t i, j
+                                    int n, dist_params* params,
+                                    int rowindex1,
+                                    int rowindex2):
+    cdef int i, j
     cdef DTYPE_t d, res = 0
 
     assert n == params.mahalanobis.n
@@ -248,10 +249,10 @@ cdef DTYPE_t sqmahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
 
 
 cdef DTYPE_t seuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 Py_ssize_t n, dist_params* params,
-                                 Py_ssize_t rowindex1,
-                                 Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                 int n, dist_params* params,
+                                 int rowindex1,
+                                 int rowindex2):
+    cdef int i
     cdef DTYPE_t d, res = 0
     
     for i from 0 <= i < n:
@@ -261,11 +262,12 @@ cdef DTYPE_t seuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
     return sqrt(res)
 
 
+@cython.cdivision(True)
 cdef DTYPE_t sqseuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 Py_ssize_t n, dist_params* params,
-                                 Py_ssize_t rowindex1,
-                                 Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                   int n, dist_params* params,
+                                   int rowindex1,
+                                   int rowindex2):
+    cdef int i
     cdef DTYPE_t d, res = 0
     
     for i from 0 <= i < n:
@@ -276,10 +278,10 @@ cdef DTYPE_t sqseuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
 
 
 cdef DTYPE_t sqeuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  Py_ssize_t n, dist_params* params,
-                                  Py_ssize_t rowindex1,
-                                  Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                  int n, dist_params* params,
+                                  int rowindex1,
+                                  int rowindex2):
+    cdef int i
     cdef DTYPE_t d, res = 0
 
     for i from 0 <= i < n:
@@ -289,11 +291,12 @@ cdef DTYPE_t sqeuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
     return res
 
 
+@cython.cdivision(True)
 cdef DTYPE_t cosine_distance(DTYPE_t* x1, DTYPE_t* x2,
-                             Py_ssize_t n, dist_params* params,
-                             Py_ssize_t rowindex1,
-                             Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                             int n, dist_params* params,
+                             int rowindex1,
+                             int rowindex2):
+    cdef int i
     cdef DTYPE_t x1nrm = 0, x2nrm = 0, x1Tx2 = 0, normalization = 0
 
     cdef int precomputed1 = (rowindex1 >= 0)
@@ -318,11 +321,12 @@ cdef DTYPE_t cosine_distance(DTYPE_t* x1, DTYPE_t* x2,
     return 1.0 - (x1Tx2) / normalization
 
 
+@cython.cdivision(True)
 cdef DTYPE_t correlation_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  Py_ssize_t n, dist_params* params,
-                                  Py_ssize_t rowindex1,
-                                  Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                  int n, dist_params* params,
+                                  int rowindex1,
+                                  int rowindex2):
+    cdef int i
     cdef DTYPE_t mu1 = 0, mu2 = 0, x1nrm = 0, x2nrm = 0, x1Tx2 = 0
     cdef DTYPE_t normalization
 
@@ -361,41 +365,45 @@ cdef DTYPE_t correlation_distance(DTYPE_t* x1, DTYPE_t* x2,
     return 1. - x1Tx2 / normalization
 
 
+@cython.cdivision(True)
 cdef DTYPE_t hamming_distance(DTYPE_t* x1, DTYPE_t* x2,
-                              Py_ssize_t n, dist_params* params,
-                              Py_ssize_t rowindex1,
-                              Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                              int n, dist_params* params,
+                              int rowindex1,
+                              int rowindex2):
+    cdef int i
     cdef int n_disagree = 0
 
     for i from 0 <= i < n:
-        n_disagree += (x1[i] != x2[i])
+        if x1[i] != x2[i]:
+            n_disagree += 1
 
-    return n_disagree * 1. / n
+    return <DTYPE_t>n_disagree / <DTYPE_t>n
 
 
+@cython.cdivision(True)
 cdef DTYPE_t jaccard_distance(DTYPE_t* x1, DTYPE_t* x2,
-                              Py_ssize_t n, dist_params* params,
-                              Py_ssize_t rowindex1,
-                              Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                              int n, dist_params* params,
+                              int rowindex1,
+                              int rowindex2):
+    cdef int i
     cdef int num = 0, denom = 0
 
     for i from 0 <= i < n:
-        if (x1[i] != x2[i]) and (x1[i] != 0 or x2[i] != 0):
-            num += 1
         if x1[i] != 0 or x2[i] != 0:
             denom += 1
+            if (x1[i] != x2[i]):
+                num += 1
 
-    return num * 1. / denom
+    return <DTYPE_t>num / <DTYPE_t>denom
 
 
+@cython.cdivision(True)
 cdef DTYPE_t canberra_distance(DTYPE_t* x1, DTYPE_t* x2,
-                               Py_ssize_t n, dist_params* params,
-                               Py_ssize_t rowindex1,
-                               Py_ssize_t rowindex2):
+                               int n, dist_params* params,
+                               int rowindex1,
+                               int rowindex2):
     cdef DTYPE_t res = 0, denominator
-    cdef Py_ssize_t i
+    cdef int i
 
     for i from 0 <= i < n:
         denominator = (fabs(x1[i]) + fabs(x2[i]))
@@ -405,11 +413,12 @@ cdef DTYPE_t canberra_distance(DTYPE_t* x1, DTYPE_t* x2,
     return res
 
 
+@cython.cdivision(True)
 cdef DTYPE_t braycurtis_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 Py_ssize_t n, dist_params* params,
-                                 Py_ssize_t rowindex1,
-                                 Py_ssize_t rowindex2):
-    cdef Py_ssize_t i
+                                 int n, dist_params* params,
+                                 int rowindex1,
+                                 int rowindex2):
+    cdef int i
     cdef DTYPE_t numerator = 0, denominator = 0
 
     for i from 0 <= i < n:
@@ -419,62 +428,67 @@ cdef DTYPE_t braycurtis_distance(DTYPE_t* x1, DTYPE_t* x2,
 
     return numerator / denominator
 
+
 @cython.cdivision(True)
 cdef DTYPE_t yule_distance(DTYPE_t* x1, DTYPE_t* x2,
-                           Py_ssize_t n, dist_params* params,
-                           Py_ssize_t rowindex1,
-                           Py_ssize_t rowindex2):
+                           int n, dist_params* params,
+                           int rowindex1,
+                           int rowindex2):
     cdef int TF1, TF2, ntt = 0, nff = 0, ntf = 0, nft = 0
-    cdef Py_ssize_t i
+    cdef int i
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
-        nff += (1 - TF1) * (1 - TF2)
-        nft += (1 - TF1) * TF2
-        ntf += TF1 * (1 - TF2)
-        ntt += TF1 * TF2
+        nff += (1 - TF1) and (1 - TF2)
+        nft += (1 - TF1) and TF2
+        ntf += TF1 and (1 - TF2)
+        ntt += TF1 and TF2
 
-    return (2. * ntf * nft) / (ntt * nff + ntf * nft)
+    return <DTYPE_t>(2 * ntf * nft) / <DTYPE_t>(ntt * nff + ntf * nft)
 
 
+@cython.cdivision(True)
 cdef DTYPE_t matching_distance(DTYPE_t* x1, DTYPE_t* x2,
-                               Py_ssize_t n, dist_params* params,
-                               Py_ssize_t rowindex1,
-                               Py_ssize_t rowindex2):
+                               int n, dist_params* params,
+                               int rowindex1,
+                               int rowindex2):
     cdef int TF1, TF2, n_neq = 0
-    cdef Py_ssize_t i
+    cdef int i
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
-        n_neq += (TF1 != TF2)
+        if TF1 != TF2:
+            n_neq += 1
 
-    return n_neq * 1. / n
+    return <DTYPE_t>n_neq / <DTYPE_t>n
 
 
+@cython.cdivision(True)
 cdef DTYPE_t dice_distance(DTYPE_t* x1, DTYPE_t* x2,
-                           Py_ssize_t n, dist_params* params,
-                           Py_ssize_t rowindex1,
-                           Py_ssize_t rowindex2):
+                           int n, dist_params* params,
+                           int rowindex1,
+                           int rowindex2):
     cdef int TF1, TF2, ntt = 0, n_neq = 0
-    cdef Py_ssize_t i
+    cdef int i
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
-        ntt += TF1 * TF2
+        ntt += (TF1 and TF2)
         n_neq += (TF1 != TF2)
 
-    return n_neq * 1. / (2 * ntt + n_neq)
+    return <DTYPE_t>n_neq / <DTYPE_t>(ntt + ntt + n_neq)
 
 
+@cython.cdivision(True)
 cdef DTYPE_t kulsinski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                Py_ssize_t n, dist_params* params,
-                                Py_ssize_t rowindex1,
-                                Py_ssize_t rowindex2):
+                                int n, dist_params* params,
+                                int rowindex1,
+                                int rowindex2):
     cdef int TF1, TF2, ntt = 0, n_neq = 0
-    cdef Py_ssize_t i
+    cdef int i
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
@@ -482,74 +496,81 @@ cdef DTYPE_t kulsinski_distance(DTYPE_t* x1, DTYPE_t* x2,
         ntt += TF1 * TF2
         n_neq += (TF1 != TF2)
 
-    return (n_neq - ntt + n) * 1. / (n_neq + n)
+    return <DTYPE_t>(n_neq - ntt + n) / <DTYPE_t>(n_neq + n)
 
 
+@cython.cdivision(True)
 cdef DTYPE_t rogerstanimoto_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                     Py_ssize_t n, dist_params* params,
-                                     Py_ssize_t rowindex1,
-                                     Py_ssize_t rowindex2):
+                                     int n, dist_params* params,
+                                     int rowindex1,
+                                     int rowindex2):
     cdef int TF1, TF2, n_neq = 0
-    cdef Py_ssize_t i
+    cdef int i
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
         n_neq += (TF1 != TF2)
 
-    return n_neq * 2. / (n + n_neq)
+    return <DTYPE_t>(n_neq + n_neq) / <DTYPE_t>(n + n_neq)
 
 
+@cython.cdivision(True)
 cdef DTYPE_t russellrao_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 Py_ssize_t n, dist_params* params,
-                                 Py_ssize_t rowindex1,
-                                 Py_ssize_t rowindex2):
+                                 int n, dist_params* params,
+                                 int rowindex1,
+                                 int rowindex2):
     cdef int TF1, TF2, ntt = 0
-    cdef Py_ssize_t i
+    cdef int i
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
-        ntt += TF1 * TF2
+        if TF1:
+            if TF2:
+                ntt += 1
 
-    return (n - ntt) * 1. / n
+    return <DTYPE_t>(n - ntt) / <DTYPE_t>n
 
 
+@cython.cdivision(True)
 cdef DTYPE_t sokalmichener_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                    Py_ssize_t n, dist_params* params,
-                                    Py_ssize_t rowindex1,
-                                    Py_ssize_t rowindex2):
+                                    int n, dist_params* params,
+                                    int rowindex1,
+                                    int rowindex2):
     cdef int TF1, TF2, n_neq = 0
-    cdef Py_ssize_t i
+    cdef int i
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
         n_neq += (TF1 != TF2)
 
-    return n_neq * 2.0 / (n + n_neq)
+    return <DTYPE_t>(n_neq + n_neq) / <DTYPE_t>(n + n_neq)
 
 
+@cython.cdivision(True)
 cdef DTYPE_t sokalsneath_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  Py_ssize_t n, dist_params* params,
-                                  Py_ssize_t rowindex1,
-                                  Py_ssize_t rowindex2):
+                                  int n, dist_params* params,
+                                  int rowindex1,
+                                  int rowindex2):
     cdef int TF1, TF2, ntt = 0, n_neq = 0
-    cdef Py_ssize_t i
+    cdef int i
 
     for i from 0 <= i < n:
         TF1 = (x1[i] != 0)
         TF2 = (x2[i] != 0)
-        ntt += TF1 * TF2
+        ntt += TF1 and TF2
         n_neq += (TF1 != TF2)
 
-    return n_neq * 2.0 / (ntt + 2 * n_neq)
+    n_neq += n_neq
+    return <DTYPE_t>n_neq / <DTYPE_t>(ntt + n_neq)
 
 
 cdef DTYPE_t user_distance(DTYPE_t* x1, DTYPE_t* x2,
-                           Py_ssize_t n, dist_params* params,
-                           Py_ssize_t rowindex1,
-                           Py_ssize_t rowindex2):
+                           int n, dist_params* params,
+                           int rowindex1,
+                           int rowindex2):
     cdef np.ndarray y1 = _buffer_to_ndarray(x1, n)
     cdef np.ndarray y2 = _buffer_to_ndarray(x2, n)
     return (<object>(params.user.func))(y1, y2)
@@ -580,6 +601,7 @@ cdef inline DTYPE_t reduced_from_euclidean(DTYPE_t x, dist_params* params):
     return x * x
 
 
+@cython.cdivision(True)
 cdef inline DTYPE_t minkowski_from_reduced(DTYPE_t x, dist_params* params):
     return pow(x, 1. / params.minkowski.p)
 
