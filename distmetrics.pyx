@@ -1,6 +1,6 @@
 import warnings
-
 import numpy as np
+
 cimport numpy as np
 cimport cython
 
@@ -18,41 +18,24 @@ np.import_array()  # required in order to use C-API
 DTYPE = np.float64
 
 # TODO:
-#  Functionality:
-#   - add `override_precomputed` flag on distance functions
-#
 #  Speed:
 #   - use blas for computations where appropriate
 #   - boolean functions are slow: how do we access fast C boolean operations?
+#     new cython version?
 #   - enable fast euclidean distances using (x-y)^2 = x^2 + y^2 - 2xy
-#     and 'precomputed norms' flag
+#     and 'precomputed_norms' flag
 #
 #  Documentation:
 #   - documentation of metrics
 #   - double-check consistency with sklearn.metrics & scipy.spatial.distance
 #
 #  Future Functionality:
-#   - make cdist/pdist work with fortran arrays (see note below)
-#   - make cdist/pdist work with csr matrices.  This will require writing
+#   - make distances work with fortran arrays (see note below)
+#   - make distances work with csr matrices.  This will require writing
 #     a new form of each distance function which accepts csr input.
-#   - implement KD tree based on this (?)
-#   - cover tree as well (?)
+#   - Implement cover tree as well (?)
 #   - templating?  this would be a great candidate to try out cython templates.
 #
-
-# One idea:
-#  to save on memory, we could define general distance functions with
-#   the signature
-#  dfunc(DTYPE_t* x1, DTYPE_t* x2, int n,
-#        int rowstride1, int colstride1,
-#        int rowstride2, int colstride2,
-#        int rowindex1,  int rowindex2,
-#        dist_params* params)
-#
-#  This would allow arbitrary numpy arrays to be used by the function,
-#   but would slightly slow down computation.
-
-
 ###############################################################################
 # Helper functions
 cdef np.ndarray _norms(np.ndarray X):
@@ -64,7 +47,7 @@ cdef np.ndarray _centered(np.ndarray X):
 cdef inline np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
     # Wrap a memory buffer with an ndarray.  Warning: this is not robust.
     # In particular, if x is deallocated before the returned array goes
-    # out of scope, this could SegFault.
+    # out of scope, this could cause memory errors.
 
     # if we know what n is beforehand, we can simply call
     # (in newer cython versions)

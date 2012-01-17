@@ -5,11 +5,7 @@
 # TODO:
 #  - documentation update with metrics
 #
-#  - how to do best enable backward compatibility with p parameter?
-#
 #  - code cleanup, make sure all variables are declared
-#
-#  - tests of various metrics...  triangle inequality...
 #
 #  - currently all metrics are used without precomputed values.  This should
 #    be addressed.
@@ -207,8 +203,7 @@ cimport cython
 from libc cimport stdlib
 from libc.math cimport fabs, fmax, fmin, sqrt, pow
 
-from distmetrics cimport \
-    DistanceMetric, DTYPE_t, dist_func, dist_params, dist_conv_func
+from distmetrics cimport DistanceMetric, DTYPE_t
 from distmetrics import DTYPE
 
 from sklearn.utils import array2d
@@ -416,7 +411,7 @@ cdef class BallTree(object):
         self.node_info_arr = np.empty(0, dtype='c')
 
     def __init__(self, X, leaf_size=20, 
-                 metric="euclidean", **kwargs):
+                 metric="minkowski", p=2, **kwargs):
         if metric in INVALID_METRICS:
             raise ValueError("metric %s does not satisfy the triangle "
                              "inequality: BallTree cannot be used")
@@ -434,7 +429,7 @@ cdef class BallTree(object):
         self.leaf_size = leaf_size
 
         # set up dist_metric if needed
-        self.dm = DistanceMetric(metric, **kwargs)
+        self.dm = DistanceMetric(metric, p=p, **kwargs)
         if self.dm.learn_params_from_data:
             self.dm.set_params_from_data(self.data)
 
