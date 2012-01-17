@@ -1,5 +1,8 @@
 import warnings
 import numpy as np
+from scipy.sparse import isspmatrix, isspmatrix_csr
+
+from sklearn.utils import safe_asarray, atleast2d_or_csr
 
 cimport numpy as np
 cimport cython
@@ -60,7 +63,9 @@ cdef inline np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
 ###############################################################################
 #Here we define the various distance functions
 #
-# Distance functions have the following call signature
+#----------------------------------------------------------------------
+# Dense-dense distance functions have the following call signature
+#----------------------------------------------------------------------
 #
 # distance(DTYPE_t* x1, DTYPE_t* x1, int n,
 #          dist_params* params,
@@ -82,11 +87,50 @@ cdef inline np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
 #     Returns
 #     -------
 #     D : double
-#         distance between v1 and v2
+#         distance between x1 and x2
+#
+#----------------------------------------------------------------------
+# Sparse-dense distance functions have the following call signature
+#  Note that sparse-dense distance functions assume that the sparse
+#  vector is in cannonical format (indices are ordered, and only appear
+#  once).
+#----------------------------------------------------------------------
+#
+# distance(DTYPE_t * x1, DTYPE_t* ind1, int n1,
+#          DTYPE_t* x2, int n,
+#          dist_params* params,
+#          int rowindex1, int rowindex2)
+#
+#     Parameters
+#     ----------
+#     x1 : double[n1]
+#         sparse data array
+#     ind1 : int[n1]
+#         index array
+#     n1 : int
+#         length of sparse data
+#     x2 : double[n]
+#         dense data array
+#     n : int
+#         length of arrays
+#     params : structure
+#         the parameter structure contains various parameters that define
+#         the distance metric, or aid in faster computation.
+#     rowindex1, rowindex2 : integers
+#         these define the offsets for precomputed values
+#         if either is negative, then no precomputed value will be used.
+#    
+#     Returns
+#     -------
+#     D : double
+#         distance between x1 and x2
 #
 ###############################################################################
 
 
+######################################################################
+# euclidean distance
+#
 cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 int n, dist_params* params,
                                 int rowindex1,
@@ -101,6 +145,33 @@ cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
     return sqrt(res)
 
 
+cdef DTYPE_t euclidean_distance_spde(DTYPE_t* x1, ITYPE_t* ind1, int n1,
+                                     DTYPE_t* x2, int n,
+                                     dist_params* params,
+                                     int rowindex1, int rowindex2):
+    cdef int i1, i2, ii
+    cdef DTYPE_t d, res=0
+
+    i2 = 0
+    for i1 from 0 <= i1 < n1:
+        ii = ind1[i1]
+        while i2 < ii:
+            res += x2[i2] * x2[i2]
+            i2 += 1
+        d = x1[i1] - x2[ii]
+        res += d * d
+        i2 += 1
+
+    while i2 < n:
+        res += x2[i2] * x2[i2]
+        i2 += 1
+
+    return sqrt(res)
+
+
+######################################################################
+# manhattan distance
+#
 cdef DTYPE_t manhattan_distance(DTYPE_t* x1, DTYPE_t* x2,
                                 int n, dist_params* params,
                                 int rowindex1,
@@ -728,6 +799,7 @@ cdef class DistanceMetric(object):
 
         if metric in ["euclidean", 'l2', None]:
             self.dfunc = &euclidean_distance
+            self.dfunc_spde = &euclidean_distance_spde
 
         elif metric in ("manhattan", "cityblock", "l1"):
             self.dfunc = &manhattan_distance
@@ -953,9 +1025,9 @@ cdef class DistanceMetric(object):
         if persist:
             self.learn_params_from_data = False
 
-        X1 = np.asarray(X1)
+        X1 = safe_asarray(X1)
         if X2 is not None:
-            X2 = np.asarray(X2)
+            X2 = safe_asarray(X2)
 
         if ((self.dfunc == &mahalanobis_distance)
             or (self.dfunc == &sqmahalanobis_distance)):
@@ -1001,9 +1073,12 @@ cdef class DistanceMetric(object):
         X1 : array-like
         X2 : array-like (optional, default = None)
         """
-        X1 = np.asarray(X1, dtype=DTYPE, order='C')
+        X1 = safe_asarray(X1, dtype=DTYPE, order='C')
         if X2 is not None:
-            X2 = np.asarray(X2, dtype=DTYPE, order='C')
+            X2 = safe_asarray(X2, dtype=DTYPE, order='C')
+
+        if isspmatrix(X1) or isspmatrix(X2):
+            return
 
         if self.dfunc == &cosine_distance:
             self.params.cosine.precomputed_norms = 1
@@ -1057,13 +1132,15 @@ cdef class DistanceMetric(object):
         ValueError
             if inputs cannot be converted to the correct form
         """
-        X1 = np.asarray(X1, dtype=DTYPE, order='C')
+        X1 = X1.tocsr() if isspmatrix(X1) else np.asarray(X1, dtype=DTYPE,
+                                                          order='C')
         assert X1.ndim == 2
         m1 = m2 = X1.shape[0]
         n = X1.shape[1]
 
         if X2 is not None:
-            X2 = np.asarray(X2, dtype=DTYPE, order='C')
+            X2 = X2.tocsr() if isspmatrix(X2) else np.asarray(X2, dtype=DTYPE,
+                                                              order='C')
             assert X2.ndim == 2
             assert X2.shape[1] == n
             m2 = X2.shape[0]
@@ -1106,7 +1183,11 @@ cdef class DistanceMetric(object):
                 Y = np.empty(m1 * (m1 - 1) / 2, dtype=DTYPE)
             return X1, Y
         else:
-            Y = np.empty((m1, m2), dtype=DTYPE)
+            if isspmatrix(X2) and not isspmatrix(X1):
+                order='F'
+            else:
+                order='C'
+            Y = np.empty((m1, m2), dtype=DTYPE, order=order)
             return X1, X2, Y
 
     def _cleanup_after_computation(self):
@@ -1122,8 +1203,8 @@ cdef class DistanceMetric(object):
 
         Parameters
         ----------
-        X1 : array-like, shape = (m1, n)
-        X2 : array-like, shape = (m2, n)
+        X1 : array-like or sparse matrix, shape = (m1, n)
+        X2 : array-like or sparse matrix, shape = (m2, n)
 
         Returns
         -------
@@ -1137,7 +1218,17 @@ cdef class DistanceMetric(object):
         """
         X1, X2, Y = self._check_input(X1, X2)
 
-        self._cdist_cc(X1, X2, Y)
+        X1sp = isspmatrix(X1)
+        X2sp = isspmatrix(X2)
+
+        if X1sp and X2sp:
+            raise ValueError("sp-sp not supported")
+        elif X1sp:
+            self._cdist_spde(X1.data, X1.indices, X1.indptr, X2, Y)
+        elif X2sp:
+            self._cdist_spde(X2.data, X2.indices, X2.indptr, X1, Y.T)
+        else:
+            self._cdist_cc(X1, X2, Y)
 
         self._cleanup_after_computation()
 
@@ -1185,7 +1276,7 @@ cdef class DistanceMetric(object):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void _cdist_cc(self,
+    cdef void _cdist_cc(DistanceMetric self,
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] X1,
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] X2,
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] Y):
@@ -1212,9 +1303,47 @@ cdef class DistanceMetric(object):
                 pX2 += n
             pX1 += n
 
+    cdef void _cdist_spde(DistanceMetric self,
+                          np.ndarray[DTYPE_t, ndim=1, mode='c'] X1data,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indices,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indptr,
+                          np.ndarray[DTYPE_t, ndim=2, mode='c'] X2,
+                          np.ndarray[DTYPE_t, ndim=2, mode='c'] Y):
+        # cdist() workhorse. '_spde' means X1 is sparse (csr) and X2 is
+        # dense, c-ordered.
+        # Arrays are assumed to have:
+        #   X1data.shape == n1 
+        #   X1indices.shape == n1
+        #   X1indptr.shape == m1 + 1
+        #   X2.shape = (m2, n)
+        #   Y.shape = (m1, m2), where m1 is the number of rows in X1
+        cdef Py_ssize_t i1, i2, m1, m2
+        cdef int n1, n
+
+        m1 = Y.shape[0]
+        m2 = Y.shape[1]
+        n = X2.shape[1]
+        
+        cdef DTYPE_t* pX1 = <DTYPE_t*> X1data.data
+        cdef ITYPE_t* pX1i = <ITYPE_t*> X1indices.data
+        cdef DTYPE_t* pX2 = <DTYPE_t*> X2.data
+
+        for i1 from 0 <= i1 < m1:
+            pX1 = <DTYPE_t*> X1data.data + X1indptr[i1]
+            pX1i = <ITYPE_t*> X1indices.data + X1indptr[i1]
+            n1 = X1indptr[i1 + 1] - X1indptr[i1]
+
+            pX2 = <DTYPE_t*> X2.data
+            for i2 from 0 <= i2 < m2:
+                Y[i1, i2] = self.dfunc_spde(pX1, pX1i, n1,
+                                            pX2, n,
+                                            &self.params, i1, i2)
+                pX2 += n
+            
+
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void _pdist_c(self,
+    cdef void _pdist_c(DistanceMetric self,
                        np.ndarray[DTYPE_t, ndim=2, mode='c'] X,
                        np.ndarray[DTYPE_t, ndim=2, mode='c'] Y):
         # pdist() workhorse.  '_c' means X is c-ordered
@@ -1241,7 +1370,7 @@ cdef class DistanceMetric(object):
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
-    cdef void _pdist_c_compact(self,
+    cdef void _pdist_c_compact(DistanceMetric self,
                                np.ndarray[DTYPE_t, ndim=2, mode='c'] X,
                                np.ndarray[DTYPE_t, ndim=1, mode='c'] Y):
         # pdist() workhorse.  '_c' means X is c-ordered

@@ -2,8 +2,10 @@ cimport numpy as np
 
 # C data types (corresponding python types should be used in file)
 ctypedef np.float64_t DTYPE_t
+ctypedef np.int32_t ITYPE_t
 cdef enum:
     DTYPECODE = np.NPY_FLOAT64
+    ITYPECODE = np.NPY_INT32
 
 ###############################################################################
 # Define data structures needed for distance calculations
@@ -49,9 +51,13 @@ cdef union dist_params:
 ###############################################################################
 # Function pointer types
 
-# define a pointer to a generic distance function.
+# define a pointer to a generic distance function (dense-dense)
 ctypedef DTYPE_t (*dist_func)(DTYPE_t*, DTYPE_t*, int,
                               dist_params*, int, int)
+
+# define a pointer to a generic distance function (sparse-dense)
+ctypedef DTYPE_t (*dist_func_spde)(DTYPE_t*, ITYPE_t*, int, DTYPE_t*, int,
+                                   dist_params*, int, int)
 
 # pointer to a generic distance conversion function
 ctypedef DTYPE_t (*dist_conv_func)(DTYPE_t, dist_params*)
@@ -69,6 +75,10 @@ cdef class DistanceMetric(object):
     cdef dist_params params
     cdef dist_func dfunc
     cdef dist_func reduced_dfunc
+    
+    cdef dist_func_spde dfunc_spde
+    cdef dist_func_spde reduced_dfunc_spde
+
     cdef dist_conv_func dist_to_reduced
     cdef dist_conv_func reduced_to_dist
 
@@ -88,14 +98,21 @@ cdef class DistanceMetric(object):
     cdef int learn_params_from_data
 
     # workhorse routines for efficient distance computation
-    cdef void _cdist_cc(self,
+    cdef void _cdist_cc(DistanceMetric self,
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] X1,
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] X2,
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] Y)
 
-    cdef void _pdist_c(self,
+    cdef void _pdist_c(DistanceMetric self,
                        np.ndarray[DTYPE_t, ndim=2, mode='c'] X,
                        np.ndarray[DTYPE_t, ndim=2, mode='c'] Y)
+
+    cdef void _cdist_spde(DistanceMetric self,
+                          np.ndarray[DTYPE_t, ndim=1, mode='c'] X1data,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indices,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indptr,
+                          np.ndarray[DTYPE_t, ndim=2, mode='c'] X2,
+                          np.ndarray[ITYPE_t, ndim=2, mode='c'] Y)
 
     cdef void _pdist_c_compact(self,
                                np.ndarray[DTYPE_t, ndim=2, mode='c'] X,

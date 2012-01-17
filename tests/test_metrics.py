@@ -3,6 +3,7 @@ sys.path.append(os.path.abspath('../'))
 
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
+from scipy.sparse import csr_matrix
 from distmetrics import DistanceMetric
 from brute_neighbors import brute_force_neighbors
 from sklearn.neighbors import NearestNeighbors
@@ -74,6 +75,29 @@ def test_cdist(m1=15, m2=20, rseed=0):
                 print Y1[:5, :5]
                 print Y2[:5, :5]
                 assert np.allclose(Y1, Y2)
+
+
+def test_cdist_sparse(m1=15, m2=20, rseed=0):
+    """Compare DistanceMetric.cdist to scipy.spatial.distance.cdist"""
+    np.random.seed(rseed)
+    X1 = np.random.random((m1, DTEST))
+    X1.flat[::2] = 0
+    X1sp = csr_matrix(X1)
+    X2 = np.random.random((m2, DTEST))
+    for (metric, argdict) in METRIC_DICT.iteritems():
+        if metric != "euclidean":
+            continue
+        keys = argdict.keys()
+        for vals in itertools.product(*argdict.values()):
+            kwargs = dict(zip(keys, vals))
+            dist_metric = DistanceMetric(metric, **kwargs)
+
+            Y1 = dist_metric.cdist(X1, X2)
+            Y2 = dist_metric.cdist(X1sp, X2)
+            Y3 = dist_metric.cdist(X2, X1sp)
+
+            assert np.allclose(Y1, Y2)
+            assert np.allclose(Y1, Y3.T)
 
 
 def test_pdist(m=15, rseed=0):
