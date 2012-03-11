@@ -1,6 +1,3 @@
-import os, sys
-sys.path.append(os.path.abspath('../'))
-
 import numpy as np
 from numpy.testing import assert_array_almost_equal
 from ball_tree import BallTree

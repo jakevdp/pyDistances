@@ -1,225 +1,142 @@
-import os, sys
-sys.path.append(os.path.abspath('../'))
+import itertools
 
 import numpy as np
+from numpy.testing import assert_array_almost_equal
+
 from scipy.spatial.distance import cdist, pdist, squareform
 from scipy.sparse import csr_matrix
 from distmetrics import DistanceMetric
-from brute_neighbors import brute_force_neighbors
-from sklearn.neighbors import NearestNeighbors
-import itertools
 
-import cPickle
-
-# dimension for the tests
-DTEST = 10
-
-# create some inverse covariance matrices for mahalanobis
-VI = np.random.random((DTEST, DTEST))
-VI1 = np.dot(VI, VI.T)
-VI2 = np.dot(VI.T, VI)
-
-# For each distance metric, specify a dictionary of ancillary parameters
-#  and a sequence of values to test.
-#
-# note that wminkowski and canberra fail in scipy.spacial.cdist/pdist
-#  in scipy <= 0.8
-
-# create a user-defined metric
 def user_metric(x, y):
-    return np.dot(x[::-1], y)
+    return np.sum(abs(x - y) ** 3)
 
-METRIC_DICT = {'euclidean': {},
-               'cityblock': {},
-               'minkowski': dict(p=(1, 1.5, 2.0, 3.0)),
-               #'wminkowski': dict(p=(1, 1.5, 2.0),
-               #                   w=(np.random.random(DTEST),)),
-               'mahalanobis': dict(VI = (None, VI1, VI2)),
-               'seuclidean': dict(V = (None, np.random.random(DTEST),)),
-               'sqeuclidean': {},
-               'cosine': {},
-               'correlation': {},
-               'chebyshev': {},
-               #'canberra': {},
-               'braycurtis': {},
-               user_metric: {}}
+def pdist_conv(d, **kwargs):
+    return d ** kwargs['p']
 
-BOOL_METRIC_DICT = {'hamming': {},
-                    'jaccard': {},
-                    'yule' : {},
-                    'matching' : {},
-                    'dice': {},
-                    'kulsinski': {},
-                    'rogerstanimoto': {},
-                    'russellrao': {},
-                    'sokalmichener': {},
-                    'sokalsneath': {}}
+def sqdist_conv(d, **kwargs):
+    return d * d
 
+class TestMetrics:
+    def __init__(self, n1=5, n2=6, d=4, zero_frac=0.5,
+                 rseed=0, dtype=np.float64):
+        np.random.seed(rseed)
+        self.X1 = np.random.random((n1, d)).astype(dtype)
+        self.X2 = np.random.random((n2, d)).astype(dtype)
 
-def test_cdist(m1=15, m2=20, rseed=0):
-    """Compare DistanceMetric.cdist to scipy.spatial.distance.cdist"""
-    np.random.seed(rseed)
-    X1 = np.random.random((m1, DTEST))
-    X2 = np.random.random((m2, DTEST))
-    for (metric, argdict) in METRIC_DICT.iteritems():
-        keys = argdict.keys()
-        for vals in itertools.product(*argdict.values()):
-            kwargs = dict(zip(keys, vals))
-            dist_metric = DistanceMetric(metric, **kwargs)
+        self.X1[self.X1 < zero_frac] = 0
+        self.X2[self.X2 < zero_frac] = 0
 
-            Y1 = dist_metric.cdist(X1, X2)
-            Y2 = cdist(X1, X2, metric, **kwargs)
+        self.spX1 = csr_matrix(self.X1)
+        self.spX2 = csr_matrix(self.X2)
+        
+        VI = np.random.random((d, d))
+        VI = np.dot(VI, VI.T)
 
-            if not np.allclose(Y1, Y2):
-                print metric, keys, vals
-                print Y1[:5, :5]
-                print Y2[:5, :5]
-                assert np.allclose(Y1, Y2)
+        w = np.random.random(d)
 
+        self.scipy_metrics = {'minkowski':dict(p=(1, 1.5, 2, 3)),
+                              'wminkowski':dict(p=(1, 1.5, 2, 3),
+                                                w=(w,)),
+                              'mahalanobis':dict(VI=(None, VI)),
+                              'seuclidean':dict(V=(None, w)),
+                              'euclidean':{},
+                              'cityblock':{},
+                              'sqeuclidean':{},
+                              'cosine':{},
+                              'correlation':{},
+                              'chebyshev':{},
+                              'canberra':{},
+                              'braycurtis':{},
+                              'hamming':{},
+                              'jaccard':{},
+                              'yule':{},
+                              'matching':{},
+                              'dice':{},
+                              'kulsinski':{},
+                              'rogerstanimoto':{},
+                              'russellrao':{},
+                              'sokalmichener':{},
+                              'sokalsneath':{},
+                              user_metric:{}}
 
-def test_cdist_sparse(m1=15, m2=20, rseed=0):
-    """Compare DistanceMetric.cdist to scipy.spatial.distance.cdist"""
-    np.random.seed(rseed)
-    X1 = np.random.random((m1, DTEST))
-    X1.flat[::2] = 0
-    X1sp = csr_matrix(X1)
-    X2 = np.random.random((m2, DTEST))
-    for (metric, argdict) in METRIC_DICT.iteritems():
-        if metric != "euclidean":
-            continue
-        keys = argdict.keys()
-        for vals in itertools.product(*argdict.values()):
-            kwargs = dict(zip(keys, vals))
-            dist_metric = DistanceMetric(metric, **kwargs)
+        self.reduced_metrics = {'pminkowski': ('minkowski', pdist_conv),
+                                'pwminkowski': ('wminkowski', pdist_conv),
+                                'sqmahalanobis': ('mahalanobis', sqdist_conv),
+                                'sqseuclidean': ('seuclidean', sqdist_conv),
+                                'sqeuclidean': ('euclidean', sqdist_conv)}
 
-            Y1 = dist_metric.cdist(X1, X2)
-            Y2 = dist_metric.cdist(X1sp, X2)
-            Y3 = dist_metric.cdist(X2, X1sp)
+    def test_cdist(self):
+        for metric, argdict in self.scipy_metrics.iteritems():
+            keys = argdict.keys()
+            for vals in itertools.product(*argdict.values()):
+                kwargs = dict(zip(keys, vals))
+                D_true = cdist(self.X1, self.X2, metric, **kwargs)
+                dm = DistanceMetric(metric, **kwargs)
+                for X1 in self.X1, self.spX1:
+                    for X2 in self.X2, self.spX2:
+                        yield self.check_cdist, metric, X1, X2, dm, D_true
 
-            assert np.allclose(Y1, Y2)
-            assert np.allclose(Y1, Y3.T)
+        for rmetric, (metric, func) in self.reduced_metrics.iteritems():
+            argdict = self.scipy_metrics[metric]
+            keys = argdict.keys()
+            for vals in itertools.product(*argdict.values()):
+                kwargs = dict(zip(keys, vals))
+                D_true = func(cdist(self.X1, self.X2, metric, **kwargs),
+                              **kwargs)
+                dm = DistanceMetric(rmetric, **kwargs)
+                for X1 in self.X1, self.spX1:
+                    for X2 in self.X2, self.spX2:
+                        yield self.check_cdist, rmetric, X1, X2, dm, D_true
+            
+    def check_cdist(self, metric, X1, X2, dm, D_true):
+        D12 = dm.cdist(X1, X2)
+        assert_array_almost_equal(D12, D_true, 6,
+                                  "Mismatch for metric=%s, X1=%s, X2=%s"
+                                  % (metric,
+                                     X1.__class__.__name__,
+                                     X2.__class__.__name__))
 
+    def test_pdist(self):
+        for metric, argdict in self.scipy_metrics.iteritems():
+            keys = argdict.keys()
+            for vals in itertools.product(*argdict.values()):
+                kwargs = dict(zip(keys, vals))
+                D_true = pdist(self.X1, metric, **kwargs)
+                Dsq_true = squareform(D_true)
+                dm = DistanceMetric(metric, **kwargs)
+                for X in self.X1, self.spX1:
+                    yield self.check_pdist, metric, X, dm, Dsq_true, True
 
-def test_pdist(m=15, rseed=0):
-    """Compare DistanceMetric.pdist to scipy.spatial.distance.pdist"""
-    np.random.seed(rseed)
-    X = np.random.random((m, DTEST))
-    for (metric, argdict) in METRIC_DICT.iteritems():
-        keys = argdict.keys()
-        for vals in itertools.product(*argdict.values()):
-            kwargs = dict(zip(keys, vals))
-            dist_metric = DistanceMetric(metric, **kwargs)
+                for X in self.X1, self.spX1:
+                    yield self.check_pdist, metric, X, dm, D_true, False
 
-            Y1 = dist_metric.pdist(X)
-            Y2 = pdist(X, metric, **kwargs)
+        for rmetric, (metric, func) in self.reduced_metrics.iteritems():
+            argdict = self.scipy_metrics[metric]
+            keys = argdict.keys()
+            for vals in itertools.product(*argdict.values()):
+                kwargs = dict(zip(keys, vals))
+                D_true = func(pdist(self.X1, metric, **kwargs),
+                              **kwargs)
+                Dsq_true = squareform(D_true)
+                dm = DistanceMetric(rmetric, **kwargs)
+                for X in self.X1, self.spX1:
+                    yield self.check_pdist, rmetric, X, dm, Dsq_true, True
 
-            if not np.allclose(Y1, Y2):
-                print metric, keys, vals
-                assert np.allclose(Y1, Y2)
+                for X in self.X1, self.spX1:
+                    yield self.check_pdist, rmetric, X, dm, D_true, False
 
+    def check_pdist(self, metric, X, dm, D_true, squareform):
+        D12 = dm.pdist(X, squareform=squareform)
 
-def test_pdist_square(m=15, rseed=0):
-    """Compare DistanceMetric.pdist to scipy.spatial.distance.pdist"""
-    np.random.seed(rseed)
-    X = np.random.random((m, DTEST))
-    for (metric, argdict) in METRIC_DICT.iteritems():
-        keys = argdict.keys()
-        for vals in itertools.product(*argdict.values()):
-            kwargs = dict(zip(keys, vals))
-            dist_metric = DistanceMetric(metric, **kwargs)
+        # set diagonal to zero for non-metrics
+        if squareform: D12.flat[::X.shape[0] + 1] = 0
+        assert_array_almost_equal(D12, D_true, 6,
+                                  "Mismatch for pdist square=%s, "
+                                  "metric=%s, X=%s"
+                                  % (squareform, metric, X.__class__.__name__))
+        
 
-            Y1 = dist_metric.pdist(X, squareform=True)
-            Y2 = squareform(pdist(X, metric, **kwargs))
-
-            if not np.allclose(Y1, Y2):
-                print metric, keys, vals
-                assert np.allclose(Y1, Y2)
-
-
-def test_cdist_bool(m1=15, m2=20, rseed=0):
-    """Compare DistanceMetric.cdist to scipy.spatial.distance.cdist"""
-    np.random.seed(rseed)
-    X1 = (np.random.random((m1, DTEST)) > 0.5).astype(float)
-    X2 = (np.random.random((m2, DTEST)) > 0.5).astype(float)
-    for (metric, argdict) in BOOL_METRIC_DICT.iteritems():
-        keys = argdict.keys()
-        for vals in itertools.product(*argdict.values()):
-            kwargs = dict(zip(keys, vals))
-            dist_metric = DistanceMetric(metric, **kwargs)
-
-            Y1 = dist_metric.cdist(X1, X2)
-            Y2 = cdist(X1, X2, metric, **kwargs)
-
-            if not np.allclose(Y1, Y2):
-                print metric, keys, vals
-                print Y1[:5, :5]
-                print Y2[:5, :5]
-                assert np.allclose(Y1, Y2)
-
-
-def test_pdist_bool(m=15, rseed=0):
-    """Compare DistanceMetric.pdist to scipy.spatial.distance.pdist"""
-    np.random.seed(rseed)
-    X = (np.random.random((m, DTEST)) > 0.5).astype(float)
-    for (metric, argdict) in BOOL_METRIC_DICT.iteritems():
-        keys = argdict.keys()
-        for vals in itertools.product(*argdict.values()):
-            kwargs = dict(zip(keys, vals))
-            dist_metric = DistanceMetric(metric, **kwargs)
-
-            Y1 = dist_metric.pdist(X)
-            Y2 = pdist(X, metric, **kwargs)
-
-            if not np.allclose(Y1, Y2):
-                print metric, keys, vals
-                assert np.allclose(Y1, Y2)
-
-def test_pdist_squareform(m=10, d=3, rseed=0):
-    X = np.random.random((m, d))
-    dist_metric = DistanceMetric()
-    Y1 = squareform(dist_metric.pdist(X, squareform=False))
-    Y2 = dist_metric.pdist(X, squareform=True)
-    assert np.allclose(Y1, Y2)
-
-def test_user_metric(m1 = 2, m2 = 3):
-    X1 = np.random.random((m1, DTEST))
-    X2 = np.random.random((m2, DTEST))
-    f = lambda x, y: np.dot(x[::-1], y)
-
-    dist_metric = DistanceMetric(f)
-    res1 = dist_metric.cdist(X1, X2)
-
-    res2 = cdist(X1, X2, f)
-
-    assert np.allclose(res1, res2)
-
-
-def test_brute_neighbors(n1=10, n2=20, m=5, k=5, rseed=0):
-    X = np.random.random((n1, m))
-    Y = np.random.random((n2, m))
-
-    nbrs = NearestNeighbors(k).fit(Y)
-    ind1 = nbrs.kneighbors(X, return_distance=False)
-
-    ind2 = brute_force_neighbors(X, Y, k)
-
-    assert np.all(ind1 == ind2)
-
-def test_pickle(n=5, d=3):
-    X = np.random.random((n, d))
-    VI = np.random.random((d, d))
-    VI = np.dot(VI, VI.T)
-    
-    dm = DistanceMetric('mahalanobis', VI=VI)
-    dist = dm.pdist(X)
-    
-    for protocol in (0, 1, 2):
-        s = cPickle.dumps(dm)
-        dm2 = cPickle.loads(s)
-
-        assert np.allclose(dist, dm2.pdist(X))
-
-
+        
 if __name__ == '__main__':
     import nose
     nose.runmodule()

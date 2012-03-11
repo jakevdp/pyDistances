@@ -2,24 +2,18 @@ import warnings
 import numpy as np
 from scipy.sparse import isspmatrix, isspmatrix_csr
 
-from sklearn.utils import safe_asarray, atleast2d_or_csr
+from utils import safe_asarray, corr, column_var, _norms, _centered
 
 cimport numpy as np
 cimport cython
 
-from libc.math cimport fabs, fmax, sqrt, pow
-
-cdef extern from "stdlib.h":
-    int strcmp(char *a, char *b)
-
-cdef extern from "arrayobject.h":
-    object PyArray_SimpleNewFromData(int nd, np.npy_intp* dims, 
-                                     int typenum, void* data)
-np.import_array()  # required in order to use C-API
+include "distfuncs.pxi"
 
 # python data types (corresponding C-types are in pxd file)
 DTYPE = np.float64
+ITYPE = np.int32
 
+######################################################################
 # TODO:
 #  Speed:
 #   - use blas for computations where appropriate
@@ -39,597 +33,6 @@ DTYPE = np.float64
 #   - Implement cover tree as well (?)
 #   - templating?  this would be a great candidate to try out cython templates.
 #
-###############################################################################
-# Helper functions
-cdef np.ndarray _norms(np.ndarray X):
-    return np.sqrt(np.asarray((X ** 2).sum(1), dtype=DTYPE, order='C'))
-
-cdef np.ndarray _centered(np.ndarray X):
-    return X - X.mean(1).reshape((-1, 1))
-
-cdef inline np.ndarray _buffer_to_ndarray(DTYPE_t* x, np.npy_intp n):
-    # Wrap a memory buffer with an ndarray.  Warning: this is not robust.
-    # In particular, if x is deallocated before the returned array goes
-    # out of scope, this could cause memory errors.
-
-    # if we know what n is beforehand, we can simply call
-    # (in newer cython versions)
-    #return np.asarray(<double[:100]> x)
-
-    # Note: this Segfaults unless np.import_array() is called above
-    return PyArray_SimpleNewFromData(1, &n, DTYPECODE, <void*>x)
-
-
-###############################################################################
-#Here we define the various distance functions
-#
-#----------------------------------------------------------------------
-# Dense-dense distance functions have the following call signature
-#----------------------------------------------------------------------
-#
-# distance(DTYPE_t* x1, DTYPE_t* x1, int n,
-#          dist_params* params,
-#          int rowindex1, int rowindex2)
-#
-#     Parameters
-#     ----------
-#     x1, x2 : double*
-#         pointers to data arrays
-#     n : integer
-#         length of vector
-#     params : structure
-#         the parameter structure contains various parameters that define
-#         the distance metric, or aid in faster computation.
-#     rowindex1, rowindex2 : integers
-#         these define the offsets for precomputed values
-#         if either is negative, then no precomputed value will be used.
-#    
-#     Returns
-#     -------
-#     D : double
-#         distance between x1 and x2
-#
-#----------------------------------------------------------------------
-# Sparse-dense distance functions have the following call signature
-#  Note that sparse-dense distance functions assume that the sparse
-#  vector is in cannonical format (indices are ordered, and only appear
-#  once).
-#----------------------------------------------------------------------
-#
-# distance(DTYPE_t * x1, DTYPE_t* ind1, int n1,
-#          DTYPE_t* x2, int n,
-#          dist_params* params,
-#          int rowindex1, int rowindex2)
-#
-#     Parameters
-#     ----------
-#     x1 : double[n1]
-#         sparse data array
-#     ind1 : int[n1]
-#         index array
-#     n1 : int
-#         length of sparse data
-#     x2 : double[n]
-#         dense data array
-#     n : int
-#         length of arrays
-#     params : structure
-#         the parameter structure contains various parameters that define
-#         the distance metric, or aid in faster computation.
-#     rowindex1, rowindex2 : integers
-#         these define the offsets for precomputed values
-#         if either is negative, then no precomputed value will be used.
-#    
-#     Returns
-#     -------
-#     D : double
-#         distance between x1 and x2
-#
-###############################################################################
-
-
-######################################################################
-# euclidean distance
-#
-cdef DTYPE_t euclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                int n, dist_params* params,
-                                int rowindex1,
-                                int rowindex2):
-    cdef int i
-    cdef DTYPE_t d, res = 0
-
-    for i from 0 <= i < n:
-        d = x1[i] - x2[i]
-        res += d * d
-    
-    return sqrt(res)
-
-
-cdef DTYPE_t euclidean_distance_spde(DTYPE_t* x1, ITYPE_t* ind1, int n1,
-                                     DTYPE_t* x2, int n,
-                                     dist_params* params,
-                                     int rowindex1, int rowindex2):
-    cdef int i1, i2, ii
-    cdef DTYPE_t d, res=0
-
-    i2 = 0
-    for i1 from 0 <= i1 < n1:
-        ii = ind1[i1]
-        while i2 < ii:
-            res += x2[i2] * x2[i2]
-            i2 += 1
-        d = x1[i1] - x2[ii]
-        res += d * d
-        i2 += 1
-
-    while i2 < n:
-        res += x2[i2] * x2[i2]
-        i2 += 1
-
-    return sqrt(res)
-
-
-######################################################################
-# manhattan distance
-#
-cdef DTYPE_t manhattan_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                int n, dist_params* params,
-                                int rowindex1,
-                                int rowindex2):
-    cdef int i
-    cdef DTYPE_t res = 0
-    
-    for i from 0 <= i < n:
-        res += fabs(x1[i] - x2[i])
-
-    return res
-
-
-cdef DTYPE_t chebyshev_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                int n, dist_params* params,
-                                int rowindex1,
-                                int rowindex2):
-    cdef int i
-    cdef DTYPE_t res = 0
-    
-    for i from 0 <= i < n:
-        res = fmax(res, fabs(x1[i] - x2[i]))
-
-    return res
-
-
-@cython.cdivision(True)
-cdef DTYPE_t minkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                int n, dist_params* params,
-                                int rowindex1,
-                                int rowindex2):
-    cdef int i
-    cdef DTYPE_t d, res = 0
-
-    for i from 0 <= i < n:
-        d = fabs(x1[i] - x2[i])
-        res += pow(d, params.minkowski.p)
-
-    return pow(res, 1. / params.minkowski.p)
-
-
-cdef DTYPE_t pminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 int n, dist_params* params,
-                                 int rowindex1,
-                                 int rowindex2):
-    cdef int i
-    cdef DTYPE_t d, res = 0
-
-    for i from 0 <= i < n:
-        d = fabs(x1[i] - x2[i])
-        res += pow(d, params.minkowski.p)
-
-    return res
-
-
-@cython.cdivision(True)
-cdef DTYPE_t wminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 int n, dist_params* params,
-                                 int rowindex1,
-                                 int rowindex2):
-    cdef int i
-    cdef DTYPE_t d, res = 0
-    
-    for i from 0 <= i < n:
-        d = fabs(x1[i] - x2[i])
-        res += pow(params.minkowski.w[i] * d, params.minkowski.p)
-
-    return pow(res, 1. / params.minkowski.p)
-
-
-cdef DTYPE_t pwminkowski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  int n, dist_params* params,
-                                  int rowindex1,
-                                  int rowindex2):
-    cdef int i
-    cdef DTYPE_t d, res = 0
-    
-    for i from 0 <= i < n:
-        d = fabs(x1[i] - x2[i])
-        res += pow(params.minkowski.w[i] * d, params.minkowski.p)
-
-    return res
-
-
-cdef DTYPE_t mahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  int n, dist_params* params,
-                                  int rowindex1,
-                                  int rowindex2):
-    cdef int i, j
-    cdef DTYPE_t d, res = 0
-
-    assert n == params.mahalanobis.n
-
-    # TODO: use blas here
-    for i from 0 <= i < n:
-        params.mahalanobis.work_buffer[i] = x1[i] - x2[i]
-
-    for i from 0 <= i < n:
-        d = 0
-        for j from 0 <= j < n:
-            d += (params.mahalanobis.VI[i * n + j]
-                  * params.mahalanobis.work_buffer[j])
-        res += d * params.mahalanobis.work_buffer[i]
-
-    return sqrt(res)
-
-
-cdef DTYPE_t sqmahalanobis_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                    int n, dist_params* params,
-                                    int rowindex1,
-                                    int rowindex2):
-    cdef int i, j
-    cdef DTYPE_t d, res = 0
-
-    assert n == params.mahalanobis.n
-
-    # TODO: use blas here
-    for i from 0 <= i < n:
-        params.mahalanobis.work_buffer[i] = x1[i] - x2[i]
-
-    for i from 0 <= i < n:
-        d = 0
-        for j from 0 <= j < n:
-            d += (params.mahalanobis.VI[i * n + j]
-                  * params.mahalanobis.work_buffer[j])
-        res += d * params.mahalanobis.work_buffer[i]
-
-    return res
-
-
-cdef DTYPE_t seuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 int n, dist_params* params,
-                                 int rowindex1,
-                                 int rowindex2):
-    cdef int i
-    cdef DTYPE_t d, res = 0
-    
-    for i from 0 <= i < n:
-        d = x1[i] - x2[i]
-        res += d * d / params.seuclidean.V[i]
-    
-    return sqrt(res)
-
-
-@cython.cdivision(True)
-cdef DTYPE_t sqseuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                   int n, dist_params* params,
-                                   int rowindex1,
-                                   int rowindex2):
-    cdef int i
-    cdef DTYPE_t d, res = 0
-    
-    for i from 0 <= i < n:
-        d = x1[i] - x2[i]
-        res += d * d / params.seuclidean.V[i]
-    
-    return res
-
-
-cdef DTYPE_t sqeuclidean_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  int n, dist_params* params,
-                                  int rowindex1,
-                                  int rowindex2):
-    cdef int i
-    cdef DTYPE_t d, res = 0
-
-    for i from 0 <= i < n:
-        d = x1[i] - x2[i]
-        res += d * d
-    
-    return res
-
-
-@cython.cdivision(True)
-cdef DTYPE_t cosine_distance(DTYPE_t* x1, DTYPE_t* x2,
-                             int n, dist_params* params,
-                             int rowindex1,
-                             int rowindex2):
-    cdef int i
-    cdef DTYPE_t x1nrm = 0, x2nrm = 0, x1Tx2 = 0, normalization = 0
-
-    cdef int precomputed1 = (rowindex1 >= 0)
-    cdef int precomputed2 = (rowindex2 >= 0)
-
-    # TODO: use blas here
-    if params.cosine.precomputed_norms and precomputed1 and precomputed2:
-        for i from 0 <= i < n:
-            x1Tx2 += x1[i] * x2[i]
-
-        normalization = params.cosine.norms1[rowindex1]
-        normalization *= params.cosine.norms2[rowindex2]
-    
-    else:
-        for i from 0 <= i < n:
-            x1nrm += x1[i] * x1[i]
-            x2nrm += x2[i] * x2[i]
-            x1Tx2 += x1[i] * x2[i]
-
-        normalization = sqrt(x1nrm * x2nrm)
-
-    return 1.0 - (x1Tx2) / normalization
-
-
-@cython.cdivision(True)
-cdef DTYPE_t correlation_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  int n, dist_params* params,
-                                  int rowindex1,
-                                  int rowindex2):
-    cdef int i
-    cdef DTYPE_t mu1 = 0, mu2 = 0, x1nrm = 0, x2nrm = 0, x1Tx2 = 0
-    cdef DTYPE_t normalization
-
-    cdef DTYPE_t tmp1, tmp2
-
-    cdef int precomputed1 = (rowindex1 >= 0)
-    cdef int precomputed2 = (rowindex2 >= 0)
-
-    # TODO : use blas here
-    if params.correlation.precomputed_data and precomputed1 and precomputed2:
-        x1 = params.correlation.x1 + rowindex1 * n
-        x2 = params.correlation.x2 + rowindex2 * n
-
-        for i from 0 <= i < n:
-            x1Tx2 += x1[i] * x2[i]
-
-        normalization = params.correlation.norms1[rowindex1]
-        normalization *= params.correlation.norms2[rowindex2]
-
-    else:
-        for i from 0 <= i < n:
-            mu1 += x1[i]
-            mu2 += x2[i]
-        mu1 /= n
-        mu2 /= n
-
-        for i from 0 <= i < n:
-            tmp1 = x1[i] - mu1
-            tmp2 = x2[i] - mu2
-            x1nrm += tmp1 * tmp1
-            x2nrm += tmp2 * tmp2
-            x1Tx2 += tmp1 * tmp2
-
-        normalization = sqrt(x1nrm * x2nrm)
-
-    return 1. - x1Tx2 / normalization
-
-
-@cython.cdivision(True)
-cdef DTYPE_t hamming_distance(DTYPE_t* x1, DTYPE_t* x2,
-                              int n, dist_params* params,
-                              int rowindex1,
-                              int rowindex2):
-    cdef int i
-    cdef int n_disagree = 0
-
-    for i from 0 <= i < n:
-        if x1[i] != x2[i]:
-            n_disagree += 1
-
-    return <DTYPE_t>n_disagree / <DTYPE_t>n
-
-
-@cython.cdivision(True)
-cdef DTYPE_t jaccard_distance(DTYPE_t* x1, DTYPE_t* x2,
-                              int n, dist_params* params,
-                              int rowindex1,
-                              int rowindex2):
-    cdef int i
-    cdef int num = 0, denom = 0
-
-    for i from 0 <= i < n:
-        if x1[i] != 0 or x2[i] != 0:
-            denom += 1
-            if (x1[i] != x2[i]):
-                num += 1
-
-    return <DTYPE_t>num / <DTYPE_t>denom
-
-
-@cython.cdivision(True)
-cdef DTYPE_t canberra_distance(DTYPE_t* x1, DTYPE_t* x2,
-                               int n, dist_params* params,
-                               int rowindex1,
-                               int rowindex2):
-    cdef DTYPE_t res = 0, denominator
-    cdef int i
-
-    for i from 0 <= i < n:
-        denominator = (fabs(x1[i]) + fabs(x2[i]))
-        if denominator > 0:
-            res += fabs(x1[i] - x2[i]) / denominator
-
-    return res
-
-
-@cython.cdivision(True)
-cdef DTYPE_t braycurtis_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 int n, dist_params* params,
-                                 int rowindex1,
-                                 int rowindex2):
-    cdef int i
-    cdef DTYPE_t numerator = 0, denominator = 0
-
-    for i from 0 <= i < n:
-        numerator += fabs(x1[i] - x2[i])
-        denominator += fabs(x1[i])
-        denominator += fabs(x2[i])
-
-    return numerator / denominator
-
-
-@cython.cdivision(True)
-cdef DTYPE_t yule_distance(DTYPE_t* x1, DTYPE_t* x2,
-                           int n, dist_params* params,
-                           int rowindex1,
-                           int rowindex2):
-    cdef int TF1, TF2, ntt = 0, nff = 0, ntf = 0, nft = 0
-    cdef int i
-
-    for i from 0 <= i < n:
-        TF1 = (x1[i] != 0)
-        TF2 = (x2[i] != 0)
-        nff += (1 - TF1) and (1 - TF2)
-        nft += (1 - TF1) and TF2
-        ntf += TF1 and (1 - TF2)
-        ntt += TF1 and TF2
-
-    return <DTYPE_t>(2 * ntf * nft) / <DTYPE_t>(ntt * nff + ntf * nft)
-
-
-@cython.cdivision(True)
-cdef DTYPE_t matching_distance(DTYPE_t* x1, DTYPE_t* x2,
-                               int n, dist_params* params,
-                               int rowindex1,
-                               int rowindex2):
-    cdef int TF1, TF2, n_neq = 0
-    cdef int i
-
-    for i from 0 <= i < n:
-        TF1 = (x1[i] != 0)
-        TF2 = (x2[i] != 0)
-        if TF1 != TF2:
-            n_neq += 1
-
-    return <DTYPE_t>n_neq / <DTYPE_t>n
-
-
-@cython.cdivision(True)
-cdef DTYPE_t dice_distance(DTYPE_t* x1, DTYPE_t* x2,
-                           int n, dist_params* params,
-                           int rowindex1,
-                           int rowindex2):
-    cdef int TF1, TF2, ntt = 0, n_neq = 0
-    cdef int i
-
-    for i from 0 <= i < n:
-        TF1 = (x1[i] != 0)
-        TF2 = (x2[i] != 0)
-        ntt += (TF1 and TF2)
-        n_neq += (TF1 != TF2)
-
-    return <DTYPE_t>n_neq / <DTYPE_t>(ntt + ntt + n_neq)
-
-
-@cython.cdivision(True)
-cdef DTYPE_t kulsinski_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                int n, dist_params* params,
-                                int rowindex1,
-                                int rowindex2):
-    cdef int TF1, TF2, ntt = 0, n_neq = 0
-    cdef int i
-
-    for i from 0 <= i < n:
-        TF1 = (x1[i] != 0)
-        TF2 = (x2[i] != 0)
-        ntt += TF1 * TF2
-        n_neq += (TF1 != TF2)
-
-    return <DTYPE_t>(n_neq - ntt + n) / <DTYPE_t>(n_neq + n)
-
-
-@cython.cdivision(True)
-cdef DTYPE_t rogerstanimoto_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                     int n, dist_params* params,
-                                     int rowindex1,
-                                     int rowindex2):
-    cdef int TF1, TF2, n_neq = 0
-    cdef int i
-
-    for i from 0 <= i < n:
-        TF1 = (x1[i] != 0)
-        TF2 = (x2[i] != 0)
-        n_neq += (TF1 != TF2)
-
-    return <DTYPE_t>(n_neq + n_neq) / <DTYPE_t>(n + n_neq)
-
-
-@cython.cdivision(True)
-cdef DTYPE_t russellrao_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                 int n, dist_params* params,
-                                 int rowindex1,
-                                 int rowindex2):
-    cdef int TF1, TF2, ntt = 0
-    cdef int i
-
-    for i from 0 <= i < n:
-        TF1 = (x1[i] != 0)
-        TF2 = (x2[i] != 0)
-        if TF1:
-            if TF2:
-                ntt += 1
-
-    return <DTYPE_t>(n - ntt) / <DTYPE_t>n
-
-
-@cython.cdivision(True)
-cdef DTYPE_t sokalmichener_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                    int n, dist_params* params,
-                                    int rowindex1,
-                                    int rowindex2):
-    cdef int TF1, TF2, n_neq = 0
-    cdef int i
-
-    for i from 0 <= i < n:
-        TF1 = (x1[i] != 0)
-        TF2 = (x2[i] != 0)
-        n_neq += (TF1 != TF2)
-
-    return <DTYPE_t>(n_neq + n_neq) / <DTYPE_t>(n + n_neq)
-
-
-@cython.cdivision(True)
-cdef DTYPE_t sokalsneath_distance(DTYPE_t* x1, DTYPE_t* x2,
-                                  int n, dist_params* params,
-                                  int rowindex1,
-                                  int rowindex2):
-    cdef int TF1, TF2, ntt = 0, n_neq = 0
-    cdef int i
-
-    for i from 0 <= i < n:
-        TF1 = (x1[i] != 0)
-        TF2 = (x2[i] != 0)
-        ntt += TF1 and TF2
-        n_neq += (TF1 != TF2)
-
-    n_neq += n_neq
-    return <DTYPE_t>n_neq / <DTYPE_t>(ntt + n_neq)
-
-
-cdef DTYPE_t user_distance(DTYPE_t* x1, DTYPE_t* x2,
-                           int n, dist_params* params,
-                           int rowindex1,
-                           int rowindex2):
-    cdef np.ndarray y1 = _buffer_to_ndarray(x1, n)
-    cdef np.ndarray y2 = _buffer_to_ndarray(x2, n)
-    return (<object>(params.user.func))(y1, y2)
-
-
 ######################################################################
 # conversions between reduced and standard distances
 #
@@ -726,6 +129,8 @@ cdef class DistanceMetric(object):
             self.norms1 = self.norms2 = self.precentered_data1 =\
             self.precentered_data2 = self.work_buffer = np.ndarray(0)
         self.dfunc = &euclidean_distance
+        self.dfunc_spde = &euclidean_distance_spde
+        self.dfunc_spsp = &euclidean_distance_spsp
 
     def __init__(self, metric="euclidean", w=None, p=None, V=None, VI=None):
         """Object for computing distance between points.
@@ -785,6 +190,9 @@ cdef class DistanceMetric(object):
           - 'russellrao'
           - 'sokalmichener'
           - 'sokalsneath'
+
+        - User-specified metric: must be a function which accepts two
+          numpy ndarrays, and returns a scalar.
           
         For details on the form of the metrics, see the docstring of
         :class:`distance_metrics`.
@@ -800,12 +208,17 @@ cdef class DistanceMetric(object):
         if metric in ["euclidean", 'l2', None]:
             self.dfunc = &euclidean_distance
             self.dfunc_spde = &euclidean_distance_spde
+            self.dfunc_spsp = &euclidean_distance_spsp
 
         elif metric in ("manhattan", "cityblock", "l1"):
             self.dfunc = &manhattan_distance
+            self.dfunc_spde = &manhattan_distance_spde
+            self.dfunc_spsp = &manhattan_distance_spsp
 
         elif metric == "chebyshev":
             self.dfunc = &chebyshev_distance
+            self.dfunc_spde = &chebyshev_distance_spde
+            self.dfunc_spsp = &chebyshev_distance_spsp
 
         elif metric == "minkowski":
             if p == None:
@@ -816,15 +229,23 @@ cdef class DistanceMetric(object):
                                  "parameter p must be greater than 0.")
             elif p == 1:
                 self.dfunc = &manhattan_distance
+                self.dfunc_spde = &manhattan_distance_spde
+                self.dfunc_spsp = &manhattan_distance_spsp
 
             elif p == 2:
                 self.dfunc = &euclidean_distance
+                self.dfunc_spde = &euclidean_distance_spde
+                self.dfunc_spsp = &euclidean_distance_spsp
 
             elif p == np.inf:
                 self.dfunc = &chebyshev_distance
+                self.dfunc_spde = &chebyshev_distance_spde
+                self.dfunc_spsp = &chebyshev_distance_spsp
 
             else:
                 self.dfunc = &minkowski_distance
+                self.dfunc_spde = &minkowski_distance_spde
+                self.dfunc_spsp = &minkowski_distance_spsp
                 self.params.minkowski.p = p
 
         elif metric == "pminkowski":
@@ -836,19 +257,29 @@ cdef class DistanceMetric(object):
                                  "parameter p must be greater than 0.")
             elif p == 1:
                 self.dfunc = &manhattan_distance
+                self.dfunc_spde = &manhattan_distance_spde
+                self.dfunc_spsp = &manhattan_distance_spsp
 
             elif p == 2:
                 self.dfunc = &sqeuclidean_distance
+                self.dfunc_spde = &sqeuclidean_distance_spde
+                self.dfunc_spsp = &sqeuclidean_distance_spsp
 
             elif p == np.inf:
                 self.dfunc = &chebyshev_distance
+                self.dfunc_spde = &chebyshev_distance_spde
+                self.dfunc_spsp = &chebyshev_distance_spsp
 
             else:
                 self.dfunc = &pminkowski_distance
+                self.dfunc_spde = &pminkowski_distance_spde
+                self.dfunc_spsp = &pminkowski_distance_spsp
                 self.params.minkowski.p = p
 
         elif metric == "wminkowski":
             self.dfunc = &wminkowski_distance
+            self.dfunc_spde = &wminkowski_distance_spde
+            self.dfunc_spsp = &wminkowski_distance_spsp
 
             if p == None:
                 raise ValueError("For metric = 'wminkowski', "
@@ -868,6 +299,8 @@ cdef class DistanceMetric(object):
 
         elif metric == "pwminkowski":
             self.dfunc = &pwminkowski_distance
+            self.dfunc_spde = &pwminkowski_distance_spde
+            self.dfunc_spsp = &pwminkowski_distance_spsp
 
             if p == None:
                 raise ValueError("For metric = 'pwminkowski', "
@@ -904,8 +337,12 @@ cdef class DistanceMetric(object):
 
             if metric == "mahalanobis":
                 self.dfunc = &mahalanobis_distance
+                self.dfunc_spde = &mahalanobis_distance_spde
+                self.dfunc_spsp = &mahalanobis_distance_spsp
             else:
                 self.dfunc = &sqmahalanobis_distance
+                self.dfunc_spde = &sqmahalanobis_distance_spde
+                self.dfunc_spsp = &sqmahalanobis_distance_spsp
 
         elif metric in ['seuclidean', 'sqseuclidean']:
             if V is None:
@@ -918,55 +355,89 @@ cdef class DistanceMetric(object):
                 self.params.seuclidean.n = self.seuclidean_V.shape[0]
             if metric == 'seuclidean':
                 self.dfunc = &seuclidean_distance
+                self.dfunc_spde = &seuclidean_distance_spde
+                self.dfunc_spsp = &seuclidean_distance_spsp
             else:
                 self.dfunc = &sqseuclidean_distance
+                self.dfunc_spde = &sqseuclidean_distance_spde
+                self.dfunc_spsp = &sqseuclidean_distance_spsp
 
         elif metric == 'sqeuclidean':
             self.dfunc = &sqeuclidean_distance
+            self.dfunc_spde = &sqeuclidean_distance_spde
+            self.dfunc_spsp = &sqeuclidean_distance_spsp
 
         elif metric == 'cosine':
             self.params.cosine.precomputed_norms = 0
             self.dfunc = &cosine_distance
+            self.dfunc_spde = &cosine_distance_spde
+            self.dfunc_spsp = &cosine_distance_spsp
 
         elif metric == 'correlation':
             self.params.correlation.precomputed_data = 0
             self.dfunc = &correlation_distance
+            self.dfunc_spde = &correlation_distance_spde
+            self.dfunc_spsp = &correlation_distance_spsp
 
         elif metric == 'hamming':
             self.dfunc = &hamming_distance
+            self.dfunc_spde = &hamming_distance_spde
+            self.dfunc_spsp = &hamming_distance_spsp
 
         elif metric == 'jaccard':
             self.dfunc = &jaccard_distance
+            self.dfunc_spde = &jaccard_distance_spde
+            self.dfunc_spsp = &jaccard_distance_spsp
 
         elif metric == 'canberra':
             self.dfunc = &canberra_distance
+            self.dfunc_spde = &canberra_distance_spde
+            self.dfunc_spsp = &canberra_distance_spsp
 
         elif metric == 'braycurtis':
             self.dfunc = &braycurtis_distance
+            self.dfunc_spde = &braycurtis_distance_spde
+            self.dfunc_spsp = &braycurtis_distance_spsp
 
         elif metric == 'yule':
             self.dfunc = &yule_distance
+            self.dfunc_spde = &yule_distance_spde
+            self.dfunc_spsp = &yule_distance_spsp
 
         elif metric == 'matching':
             self.dfunc = &matching_distance
+            self.dfunc_spde = &matching_distance_spde
+            self.dfunc_spsp = &matching_distance_spsp
 
         elif metric == 'dice':
             self.dfunc = dice_distance
+            self.dfunc_spde = dice_distance_spde
+            self.dfunc_spsp = dice_distance_spsp
 
         elif metric == 'kulsinski':
             self.dfunc = &kulsinski_distance
+            self.dfunc_spde = &kulsinski_distance_spde
+            self.dfunc_spsp = &kulsinski_distance_spsp
 
         elif metric == 'rogerstanimoto':
             self.dfunc = &rogerstanimoto_distance
+            self.dfunc_spde = &rogerstanimoto_distance_spde
+            self.dfunc_spsp = &rogerstanimoto_distance_spsp
 
         elif metric == 'russellrao':
             self.dfunc = &russellrao_distance
+            self.dfunc_spde = &russellrao_distance_spde
+            self.dfunc_spsp = &russellrao_distance_spsp
 
         elif metric == 'sokalmichener':
             self.dfunc = &sokalmichener_distance
+            self.dfunc_spde = &sokalmichener_distance_spde
+            self.dfunc_spsp = &sokalmichener_distance_spsp
 
         elif metric == 'sokalsneath':
             self.dfunc = &sokalsneath_distance
+            self.dfunc_spde = &sokalsneath_distance_spde
+            self.dfunc_spsp = &sokalsneath_distance_spsp
 
         elif callable(metric):
             x = np.random.random(3)
@@ -977,6 +448,8 @@ cdef class DistanceMetric(object):
                                  "vectors and return a scalar.")
             self.params.user.func = <void*> metric
             self.dfunc = &user_distance
+            self.dfunc_spde = &user_distance_spde
+            self.dfunc_spsp = &user_distance_spsp
 
         else:
             raise ValueError('unrecognized metric %s' % metric)
@@ -1032,14 +505,8 @@ cdef class DistanceMetric(object):
         if ((self.dfunc == &mahalanobis_distance)
             or (self.dfunc == &sqmahalanobis_distance)):
             # compute covariance matrix from data
-            if X2 is None:
-                X = X1
-            else:
-                X = np.vstack((X1, X2))
-
-            V = np.cov(X.T)
-
-            if X.shape[0] < X.shape[1]:
+            V = corr(X1, X2)
+            if V.shape[0] < X1.shape[1]:
                 warnings.warn('Mahalanobis Distance: singular covariance '
                               'matrix.  Using pseudo-inverse')
                 self.mahalanobis_VI = np.linalg.pinv(V).T
@@ -1056,12 +523,7 @@ cdef class DistanceMetric(object):
         elif ((self.dfunc == &seuclidean_distance)
               or (self.dfunc == &sqseuclidean_distance)):
             # compute variance from data
-            if X2 is None:
-                X = X1
-            else:
-                X = np.vstack((X1, X2))
-
-            self.seuclidean_V = X.var(axis=0, ddof=1)
+            self.seuclidean_V = column_var(X1, X2)
             self.params.seuclidean.V = <DTYPE_t*> self.seuclidean_V.data
             self.params.seuclidean.n = self.seuclidean_V.shape[0]
 
@@ -1132,15 +594,19 @@ cdef class DistanceMetric(object):
         ValueError
             if inputs cannot be converted to the correct form
         """
-        X1 = X1.tocsr() if isspmatrix(X1) else np.asarray(X1, dtype=DTYPE,
-                                                          order='C')
+        if isspmatrix(X1):
+            X1 = X1.tocsr()
+        else:
+            np.asarray(X1, dtype=DTYPE, order='C')
         assert X1.ndim == 2
         m1 = m2 = X1.shape[0]
         n = X1.shape[1]
 
         if X2 is not None:
-            X2 = X2.tocsr() if isspmatrix(X2) else np.asarray(X2, dtype=DTYPE,
-                                                              order='C')
+            if isspmatrix(X2):
+                X2 = X2.tocsr()
+            else:
+                np.asarray(X2, dtype=DTYPE, order='C')
             assert X2.ndim == 2
             assert X2.shape[1] == n
             m2 = X2.shape[0]
@@ -1150,7 +616,7 @@ cdef class DistanceMetric(object):
 
         self.precompute_params_from_data(X1, X2)
 
-        # check that data matches metric
+        # check that metric data matches input
         if ((self.dfunc == &mahalanobis_distance)
             or (self.dfunc == &sqmahalanobis_distance)):
             assert n == self.params.mahalanobis.n
@@ -1165,25 +631,16 @@ cdef class DistanceMetric(object):
         elif self.dfunc == &pwminkowski_distance:
             assert n == self.params.minkowski.n
 
-        elif self.dfunc == &cosine_distance:
-            self.params.cosine.precomputed_norms = 1
-            self.norms1 = _norms(X1)
-            self.params.cosine.norms1 = <DTYPE_t*> self.norms1.data
-            if X2 is None:
-                self.params.cosine.norms2 = self.params.cosine.norms1
-            else:
-                self.norms2 = _norms(X2)
-                self.params.cosine.norms2 = <DTYPE_t*> self.norms2.data
-
         # construct matrix Y
         if X2 is None:
             if squareform:
-                Y = np.empty((m1, m2), dtype=DTYPE)
+                Y = np.empty((m1, m1), dtype=DTYPE)
             else:
                 Y = np.empty(m1 * (m1 - 1) / 2, dtype=DTYPE)
             return X1, Y
         else:
             if isspmatrix(X2) and not isspmatrix(X1):
+                # we'll need to transpose Y to put X2 first
                 order='F'
             else:
                 order='C'
@@ -1221,8 +678,17 @@ cdef class DistanceMetric(object):
         X1sp = isspmatrix(X1)
         X2sp = isspmatrix(X2)
 
+        if X1sp:
+            X1 = X1.tocsr()
+            X1.sort_indices()
+        if X2sp:
+            X2 = X2.tocsr()
+            X2.sort_indices()
+
         if X1sp and X2sp:
-            raise ValueError("sp-sp not supported")
+            self._cdist_spsp(X1.data, X1.indices, X1.indptr,
+                             X2.data, X2.indices, X2.indptr,
+                             X1.shape[1], Y)
         elif X1sp:
             self._cdist_spde(X1.data, X1.indices, X1.indptr, X2, Y)
         elif X2sp:
@@ -1265,10 +731,18 @@ cdef class DistanceMetric(object):
         """
         X, Y = self._check_input(X, squareform=squareform)
 
-        if squareform:
-            self._pdist_c(X, Y)
+        if isspmatrix(X):
+            if squareform:
+                self._pdist_sp(X.data, X.indices, X.indptr,
+                               X.shape[1], Y)
+            else:
+                self._pdist_sp_compact(X.data, X.indices, X.indptr,
+                                       X.shape[1], Y)
         else:
-            self._pdist_c_compact(X, Y)
+            if squareform:
+                self._pdist_c(X, Y)
+            else:
+                self._pdist_c_compact(X, Y)
 
         self._cleanup_after_computation()
 
@@ -1339,7 +813,48 @@ cdef class DistanceMetric(object):
                                             pX2, n,
                                             &self.params, i1, i2)
                 pX2 += n
-            
+
+    cdef void _cdist_spsp(DistanceMetric self,
+                          np.ndarray[DTYPE_t, ndim=1, mode='c'] X1data,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indices,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indptr,
+                          np.ndarray[DTYPE_t, ndim=1, mode='c'] X2data,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X2indices,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X2indptr,
+                          int n,
+                          np.ndarray[DTYPE_t, ndim=2, mode='c'] Y):
+        # cdist() workhorse. '_spsp' means X1 & X2 are sparse (csr format)
+        # Arrays are assumed to have:
+        #   X1data.shape == n1 
+        #   X1indices.shape == n1
+        #   X1indptr.shape == m1 + 1
+        #   X1data.shape == n2
+        #   X1indices.shape == n2
+        #   X1indptr.shape == m2 + 1
+        #   n is the dimension of the data (X1.shape[1], X2.shape[1])
+        #   Y.shape = (m1, m2), where m1 (m2) is the number of rows in X1 (X2)
+        cdef Py_ssize_t i1, i2, m1, m2
+        cdef int n1, n2
+
+        m1 = Y.shape[0]
+        m2 = Y.shape[1]
+        
+        cdef DTYPE_t *pX1, *pX2
+        cdef ITYPE_t *pX1i, *pX2i
+
+        for i1 from 0 <= i1 < m1:
+            pX1 = <DTYPE_t*> X1data.data + X1indptr[i1]
+            pX1i = <ITYPE_t*> X1indices.data + X1indptr[i1]
+            n1 = X1indptr[i1 + 1] - X1indptr[i1]
+
+            for i2 from 0 <= i2 < m2:
+                pX2 = <DTYPE_t*> X2data.data + X2indptr[i2]
+                pX2i = <ITYPE_t*> X2indices.data + X2indptr[i2]
+                n2 = X2indptr[i2 + 1] - X2indptr[i2]
+
+                Y[i1, i2] = self.dfunc_spsp(pX1, pX1i, n1,
+                                            pX2, pX2i, n2, n,
+                                            &self.params, i1, i2)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -1368,6 +883,37 @@ cdef class DistanceMetric(object):
                 pX2 += n
             pX1 += n
 
+    cdef void _pdist_sp(DistanceMetric self,
+                        np.ndarray[DTYPE_t, ndim=1, mode='c'] Xdata,
+                        np.ndarray[ITYPE_t, ndim=1, mode='c'] Xindices,
+                        np.ndarray[ITYPE_t, ndim=1, mode='c'] Xindptr,
+                        int n,
+                        np.ndarray[DTYPE_t, ndim=2, mode='c'] Y):
+        # pdist() workhorse.  '_sp' means X is sparse csr
+        # arrays are assumed to have:
+        #   X.shape == (m, n)
+        #   Y.shape == (m, m)
+        # this is not checked within the function.
+        cdef Py_ssize_t i1, i2, m, n1, n2
+        m = Y.shape[0]
+        
+        cdef DTYPE_t *pX1, *pX2
+        cdef ITYPE_t *pX1i, *pX2i
+
+        for i1 from 0 <= i1 < m:
+            pX1 = <DTYPE_t*> Xdata.data + Xindptr[i1]
+            pX1i = <ITYPE_t*> Xindices.data + Xindptr[i1]
+            n1 = Xindptr[i1 + 1] - Xindptr[i1]
+
+            for i2 from i1 <= i2 < m:
+                pX2 = <DTYPE_t*> Xdata.data + Xindptr[i2]
+                pX2i = <ITYPE_t*> Xindices.data + Xindptr[i2]
+                n2 = Xindptr[i2 + 1] - Xindptr[i2]
+
+                Y[i1, i2] = Y[i2, i1] = self.dfunc_spsp(pX1, pX1i, n1,
+                                                        pX2, pX2i, n2, n,
+                                                        &self.params, i1, i2)
+
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void _pdist_c_compact(DistanceMetric self,
@@ -1394,6 +940,40 @@ cdef class DistanceMetric(object):
                 pX2 += n
                 i += 1
             pX1 += n
+
+    cdef void _pdist_sp_compact(DistanceMetric self,
+                                np.ndarray[DTYPE_t, ndim=1, mode='c'] Xdata,
+                                np.ndarray[ITYPE_t, ndim=1, mode='c'] Xindices,
+                                np.ndarray[ITYPE_t, ndim=1, mode='c'] Xindptr,
+                                int n,
+                                np.ndarray[DTYPE_t, ndim=1, mode='c'] Y):
+        # pdist() workhorse.  '_sp' means X is sparse csr
+        #                     '_compact' means Y is in compact form
+        # arrays are assumed to have:
+        #   X.shape == (m, n)
+        #   Y.size == m * (m - 1) / 2
+        # this is not checked within the function.
+        cdef Py_ssize_t i, i1, i2, n1, n2
+        m = Xindptr.shape[0] - 1
+
+        cdef DTYPE_t *pX1, *pX2
+        cdef ITYPE_t *pX1i, *pX2i
+        
+        i = 0
+        for i1 from 0 <= i1 < m:
+            pX1 = <DTYPE_t*> Xdata.data + Xindptr[i1]
+            pX1i = <ITYPE_t*> Xindices.data + Xindptr[i1]
+            n1 = Xindptr[i1 + 1] - Xindptr[i1]
+
+            for i2 from i1 < i2 < m:
+                pX2 = <DTYPE_t*> Xdata.data + Xindptr[i2]
+                pX2i = <ITYPE_t*> Xindices.data + Xindptr[i2]
+                n2 = Xindptr[i2 + 1] - Xindptr[i2]
+
+                Y[i] = self.dfunc_spsp(pX1, pX1i, n1,
+                                       pX2, pX2i, n2, n,
+                                       &self.params, i1, i2)
+                i += 1
 
 
 def pairwise_distances(X1, X2=None, metric="euclidean", **kwargs):

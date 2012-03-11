@@ -10,6 +10,10 @@
 #  - currently all metrics are used without precomputed values.  This should
 #    be addressed.
 #
+#
+# Thoughts:
+#  what about using fibonacci heaps to keep track of visited nodes?
+#
 
 """
 =========

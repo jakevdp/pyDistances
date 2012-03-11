@@ -11,9 +11,9 @@ cdef enum:
 # Define data structures needed for distance calculations
 
 cdef struct mahalanobis_info:
+    DTYPE_t* work_buffer  # pointer to buffer of size n
     Py_ssize_t n          # size of arrays
     DTYPE_t* VI           # pointer to buffer of size n * n
-    DTYPE_t* work_buffer  # pointer to buffer of size n
 
 cdef struct minkowski_info:
     Py_ssize_t n  # size of array
@@ -59,6 +59,11 @@ ctypedef DTYPE_t (*dist_func)(DTYPE_t*, DTYPE_t*, int,
 ctypedef DTYPE_t (*dist_func_spde)(DTYPE_t*, ITYPE_t*, int, DTYPE_t*, int,
                                    dist_params*, int, int)
 
+# define a pointer to a generic distance function (sparse-sparse)
+ctypedef DTYPE_t (*dist_func_spsp)(DTYPE_t*, ITYPE_t*, int,
+                                   DTYPE_t*, ITYPE_t*, int, int,
+                                   dist_params*, int, int)
+
 # pointer to a generic distance conversion function
 ctypedef DTYPE_t (*dist_conv_func)(DTYPE_t, dist_params*)
 
@@ -78,6 +83,9 @@ cdef class DistanceMetric(object):
     
     cdef dist_func_spde dfunc_spde
     cdef dist_func_spde reduced_dfunc_spde
+
+    cdef dist_func_spsp dfunc_spsp
+    cdef dist_func_spsp reduced_dfunc_spsp
 
     cdef dist_conv_func dist_to_reduced
     cdef dist_conv_func reduced_to_dist
@@ -103,10 +111,6 @@ cdef class DistanceMetric(object):
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] X2,
                         np.ndarray[DTYPE_t, ndim=2, mode='c'] Y)
 
-    cdef void _pdist_c(DistanceMetric self,
-                       np.ndarray[DTYPE_t, ndim=2, mode='c'] X,
-                       np.ndarray[DTYPE_t, ndim=2, mode='c'] Y)
-
     cdef void _cdist_spde(DistanceMetric self,
                           np.ndarray[DTYPE_t, ndim=1, mode='c'] X1data,
                           np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indices,
@@ -114,6 +118,34 @@ cdef class DistanceMetric(object):
                           np.ndarray[DTYPE_t, ndim=2, mode='c'] X2,
                           np.ndarray[ITYPE_t, ndim=2, mode='c'] Y)
 
+    cdef void _cdist_spsp(DistanceMetric self,
+                          np.ndarray[DTYPE_t, ndim=1, mode='c'] X1data,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indices,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indptr,
+                          np.ndarray[DTYPE_t, ndim=1, mode='c'] X2data,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X2indices,
+                          np.ndarray[ITYPE_t, ndim=1, mode='c'] X2indptr,
+                          int n,
+                          np.ndarray[ITYPE_t, ndim=2, mode='c'] Y)
+
+    cdef void _pdist_c(DistanceMetric self,
+                       np.ndarray[DTYPE_t, ndim=2, mode='c'] X,
+                       np.ndarray[DTYPE_t, ndim=2, mode='c'] Y)
+
     cdef void _pdist_c_compact(self,
                                np.ndarray[DTYPE_t, ndim=2, mode='c'] X,
                                np.ndarray[DTYPE_t, ndim=1, mode='c'] Y)
+
+    cdef void _pdist_sp(DistanceMetric self,
+                        np.ndarray[DTYPE_t, ndim=1, mode='c'] Xdata,
+                        np.ndarray[ITYPE_t, ndim=1, mode='c'] Xindices,
+                        np.ndarray[ITYPE_t, ndim=1, mode='c'] Xindptr,
+                        int n,
+                        np.ndarray[DTYPE_t, ndim=2, mode='c'] Y)
+
+    cdef void _pdist_sp_compact(self,
+                                np.ndarray[DTYPE_t, ndim=1, mode='c'] Xdata,
+                                np.ndarray[ITYPE_t, ndim=1, mode='c'] Xindices,
+                                np.ndarray[ITYPE_t, ndim=1, mode='c'] Xindptr,
+                                int n,
+                                np.ndarray[DTYPE_t, ndim=1, mode='c'] Y)
