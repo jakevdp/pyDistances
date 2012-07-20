@@ -18,21 +18,20 @@ ITYPE = np.int32
 #  Speed:
 #   - use blas for computations where appropriate
 #   - boolean functions are slow: how do we access fast C boolean operations?
-#     new cython version?
+#     new cython version? Use raw C code?
 #   - enable fast euclidean distances using (x-y)^2 = x^2 + y^2 - 2xy
 #     and 'precomputed_norms' flag
 #
 #  Documentation:
 #   - documentation of metrics
-#   - double-check consistency with sklearn.metrics & scipy.spatial.distance
 #
 #  Future Functionality:
-#   - make distances work with fortran arrays (see note below)
-#   - make distances work with csr matrices.  This will require writing
-#     a new form of each distance function which accepts csr input.
-#   - Implement cover tree as well (?)
 #   - templating?  this would be a great candidate to try out cython templates.
-#
+#     especially for single, double, and boolean
+
+
+
+
 ######################################################################
 # conversions between reduced and standard distances
 #
@@ -65,51 +64,6 @@ cdef inline DTYPE_t minkowski_from_reduced(DTYPE_t x, dist_params* params):
 
 cdef inline DTYPE_t reduced_from_minkowski(DTYPE_t x, dist_params* params):
     return pow(x, params.minkowski.p)
-
-
-cdef inline dist_func get_reduced_dfunc(dist_func dfunc):
-    if dfunc == &euclidean_distance:
-        return &sqeuclidean_distance
-    elif dfunc == &seuclidean_distance:
-        return &sqseuclidean_distance
-    elif dfunc == &minkowski_distance:
-        return &pminkowski_distance
-    elif dfunc == &wminkowski_distance:
-        return &pwminkowski_distance
-    elif dfunc == &mahalanobis_distance:
-        return &sqmahalanobis_distance
-    else:
-        return dfunc
-
-
-cdef inline dist_conv_func get_dist_to_reduced(dist_func dfunc):
-    if dfunc == &euclidean_distance:
-        return &reduced_from_euclidean
-    elif dfunc == &seuclidean_distance:
-        return &reduced_from_euclidean
-    elif dfunc == &minkowski_distance:
-        return &reduced_from_minkowski
-    elif dfunc == &wminkowski_distance:
-        return &reduced_from_minkowski
-    elif dfunc == &mahalanobis_distance:
-        return &reduced_from_euclidean
-    else:
-        return &no_conversion
-
-
-cdef inline dist_conv_func get_reduced_to_dist(dist_func dfunc):
-    if dfunc == &euclidean_distance:
-        return &euclidean_from_reduced
-    elif dfunc == &seuclidean_distance:
-        return &euclidean_from_reduced
-    elif dfunc == &minkowski_distance:
-        return &minkowski_from_reduced
-    elif dfunc == &wminkowski_distance:
-        return &minkowski_from_reduced
-    elif dfunc == &mahalanobis_distance:
-        return &euclidean_from_reduced
-    else:
-        return &no_conversion
 
 
 ######################################################################
@@ -452,11 +406,33 @@ cdef class DistanceMetric(object):
             self.dfunc_spsp = &user_distance_spsp
 
         else:
-            raise ValueError('unrecognized metric %s' % metric)
+            raise ValueError('unrecognized metric %s' % str(metric))
 
-        self.reduced_dfunc = get_reduced_dfunc(self.dfunc)
-        self.dist_to_reduced = get_dist_to_reduced(self.dfunc)
-        self.reduced_to_dist = get_reduced_to_dist(self.dfunc)
+        # Choose the correct reduced distance and conversions
+        if self.dfunc == &euclidean_distance:
+            self.reduced_dfunc = &sqeuclidean_distance
+            self.dist_to_reduced = &reduced_from_euclidean
+            self.reduced_to_dist = &euclidean_from_reduced
+        elif self.dfunc == &seuclidean_distance:
+            self.reduced_dfunc = &sqseuclidean_distance
+            self.dist_to_reduced = &reduced_from_euclidean
+            self.reduced_to_dist = &euclidean_from_reduced
+        elif self.dfunc == &minkowski_distance:
+            self.reduced_dfunc = &pminkowski_distance
+            self.dist_to_reduced = &reduced_from_minkowski
+            self.reduced_to_dist = &minkowski_from_reduced
+        elif self.dfunc == &wminkowski_distance:
+            self.reduced_dfunc = &pwminkowski_distance
+            self.dist_to_reduced = &reduced_from_minkowski
+            self.reduced_to_dist = &minkowski_from_reduced
+        elif self.dfunc == &mahalanobis_distance:
+            self.reduced_dfunc = &sqmahalanobis_distance
+            self.dist_to_reduced = &reduced_from_euclidean
+            self.reduced_to_dist = &euclidean_from_reduced
+        else:
+            self.reduced_dfunc = self.dfunc
+            self.dist_to_reduced = &no_conversion
+            self.reduced_to_dist = &no_conversion
 
     def __reduce__(self):
         """
@@ -582,7 +558,6 @@ cdef class DistanceMetric(object):
         X2 : array-like (optional, default = None)
         squareform : bool
             specify whether Y is square form.  Used only if X2 is None
- 
         
         Returns
         -------
@@ -597,7 +572,7 @@ cdef class DistanceMetric(object):
         if isspmatrix(X1):
             X1 = X1.tocsr()
         else:
-            np.asarray(X1, dtype=DTYPE, order='C')
+            X1 = np.asarray(X1, dtype=DTYPE, order='C')
         assert X1.ndim == 2
         m1 = m2 = X1.shape[0]
         n = X1.shape[1]
@@ -606,7 +581,7 @@ cdef class DistanceMetric(object):
             if isspmatrix(X2):
                 X2 = X2.tocsr()
             else:
-                np.asarray(X2, dtype=DTYPE, order='C')
+                X2 = np.asarray(X2, dtype=DTYPE, order='C')
             assert X2.ndim == 2
             assert X2.shape[1] == n
             m2 = X2.shape[0]
@@ -654,6 +629,21 @@ cdef class DistanceMetric(object):
             self.params.correlation.precomputed_data = 0
             self.precentered_data1 = np.ndarray(0)
             self.precentered_data2 = np.ndarray(0)
+
+    def dist(self, x1, x2):
+        """Compute the distance between two vectors.
+
+        Parameters
+        ----------
+        x1 : array-like, shape = (n,)
+        x2 : array-like, shape = (n,)
+
+        Returns
+        -------
+        d : real
+            distance between x1 and x2
+        """
+        return self.cdist([x1], [x2])
 
     def cdist(self, X1, X2):
         """Compute the distance between each pair of observation vectors.

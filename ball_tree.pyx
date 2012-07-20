@@ -10,10 +10,19 @@
 #  - currently all metrics are used without precomputed values.  This should
 #    be addressed.
 #
+#  - abstract-out node objects to make the code more readable.  I think it
+#    can be done, but not sure if it will lead to a speed penalty...  Create
+#    kd-tree node type as well?
+#
+#  - Add double-tree implementation to speed multiple neighbor searches.
+#
+#  - query_self method (common case)
+#
+#  - correlation function query
 #
 # Thoughts:
 #  what about using fibonacci heaps to keep track of visited nodes?
-#
+#  would recursion rather than an explicit stack be more readable?
 
 """
 =========
@@ -45,6 +54,9 @@ that the tree can be dynamically augmented or pruned with new data, in an
 in-line fashion.  This approach generally leads to recursive code: upon
 construction, the head node constructs its child nodes, the child nodes
 construct their child nodes, and so-on.
+
+For an illustration of this sort of approach, refer to slow_ball_tree.py, which
+is a python-only implementation designed for readibility rather than speed.
 
 The current package uses a different approach: all node data is stored in
 a set of numpy arrays which are pre-allocated.  The main advantage of this
@@ -193,7 +205,7 @@ the points in each node are divided as evenly as possible between the
 two children, the maximum depth needed so that leaf nodes satisfy
 ``leaf_size <= n_points <= 2 * leaf_size`` is given by
 ``n_levels = 1 + max(0, floor(log2((n_samples - 1) / leaf_size)))``
-(with the exception of the special case where ``n_samples < leaf_size``)
+(with the exception of the special case where ``n_samples <= leaf_size``)
 For a given number of levels, the number of points in a tree is given by
 ``n_nodes = 2 ** n_levels - 1``.  Both of these results can be shown
 by induction.  Using them, the correct amount of memory can be pre-allocated

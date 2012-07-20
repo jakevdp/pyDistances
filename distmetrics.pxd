@@ -1,6 +1,6 @@
 cimport numpy as np
 
-# C data types (corresponding python types should be used in file)
+# C data types (corresponding python types should be used in pyx file)
 ctypedef np.float64_t DTYPE_t
 ctypedef np.int32_t ITYPE_t
 cdef enum:
@@ -9,6 +9,10 @@ cdef enum:
 
 ###############################################################################
 # Define data structures needed for distance calculations
+#
+# Some distance metrics have ancillary information in them.  We keep track
+# of this by holding the information in a structure: these '*_info' structures
+# are defined below.
 
 cdef struct mahalanobis_info:
     DTYPE_t* work_buffer  # pointer to buffer of size n
@@ -37,9 +41,9 @@ cdef struct correlation_info:
 cdef struct user_info:
     void* func
 
-# general distance data structure.  We use a union because
+# general distance parameter data structure.  We use a union because
 # different distance metrics require different ancillary information,
-# and we only need memory allocated for one of the structures.
+# and we only need memory allocated for a single metric in each instance.
 cdef union dist_params:
     minkowski_info minkowski
     mahalanobis_info mahalanobis
@@ -97,9 +101,9 @@ cdef class DistanceMetric(object):
     cdef np.ndarray seuclidean_V       # - variance array of data
     cdef np.ndarray minkowski_w        # - weights for weighted minkowski
     cdef np.ndarray norms1             # - precomputed norms, used for cosine
-    cdef np.ndarray norms2             #   and correlation distances
+    cdef np.ndarray norms2             #    and correlation distances
     cdef np.ndarray precentered_data1  # - pre-centered data, used for
-    cdef np.ndarray precentered_data2  #   correlation distance
+    cdef np.ndarray precentered_data2  #    correlation distance
     cdef np.ndarray work_buffer        # - work buffer
 
     # flag for computation
@@ -116,7 +120,7 @@ cdef class DistanceMetric(object):
                           np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indices,
                           np.ndarray[ITYPE_t, ndim=1, mode='c'] X1indptr,
                           np.ndarray[DTYPE_t, ndim=2, mode='c'] X2,
-                          np.ndarray[ITYPE_t, ndim=2, mode='c'] Y)
+                          np.ndarray[DTYPE_t, ndim=2, mode='c'] Y)
 
     cdef void _cdist_spsp(DistanceMetric self,
                           np.ndarray[DTYPE_t, ndim=1, mode='c'] X1data,
@@ -126,7 +130,7 @@ cdef class DistanceMetric(object):
                           np.ndarray[ITYPE_t, ndim=1, mode='c'] X2indices,
                           np.ndarray[ITYPE_t, ndim=1, mode='c'] X2indptr,
                           int n,
-                          np.ndarray[ITYPE_t, ndim=2, mode='c'] Y)
+                          np.ndarray[DTYPE_t, ndim=2, mode='c'] Y)
 
     cdef void _pdist_c(DistanceMetric self,
                        np.ndarray[DTYPE_t, ndim=2, mode='c'] X,

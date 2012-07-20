@@ -29,11 +29,15 @@ setup(cmdclass = {'build_ext': build_ext},
 setup(cmdclass = {'build_ext': build_ext},
       name='brute_neighbors',
       version='1.0',
-      ext_modules=[brute_neighbors]
+      ext_modules=[brute_neighbors],
+      include_dirs=[numpy.get_include(),
+                    os.path.join(numpy.get_include(), 'numpy')]
       )
 
 setup(cmdclass = {'build_ext': build_ext},
       name='ball_tree',
       version='1.0',
       ext_modules=[ball_tree],
+      include_dirs=[numpy.get_include(),
+                    os.path.join(numpy.get_include(), 'numpy')]
       )
