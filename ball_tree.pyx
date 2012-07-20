@@ -580,6 +580,8 @@ cdef class BallTree(object):
         cdef stack node_stack
         stack_create(&node_stack, self.n_levels + 1)
 
+        # TODO: this loop could be sped up with some cdefs to avoid
+        # creating all the Xi sub-arrays
         for i, Xi in enumerate(X):
             self.query_one_(<DTYPE_t*>Xi.data, n_neighbors,
                              dist_ptr, idx_ptr, &node_stack, &hq)
@@ -699,6 +701,8 @@ cdef class BallTree(object):
 
         if count_only:
             count = np.zeros(X.shape[0], ITYPE)
+
+            #TODO: avoid enumerate and repeated allocation of pt slice
             for pt_idx, pt in enumerate(X):
                 count[pt_idx] = self.query_radius_count_(<DTYPE_t*>pt.data,
                                                          r[pt_idx],
@@ -706,6 +710,8 @@ cdef class BallTree(object):
         elif not return_distance:
             idx_array = np.empty(X.shape[0], dtype='object')
             idx_array_i = np.empty(self.data.shape[0], dtype=ITYPE)
+
+            #TODO: avoid enumerate and repeated allocation of pt slice
             for pt_idx, pt in enumerate(X):
                 count_i = self.query_radius_idx_only_(
                     <DTYPE_t*>pt.data,
@@ -719,6 +725,8 @@ cdef class BallTree(object):
             distances = np.empty(X.shape[0], dtype='object')
             idx_array_i = np.empty(self.data.shape[0], dtype=ITYPE)
             distances_i = np.empty(self.data.shape[0], dtype=DTYPE)
+
+            #TODO: avoid enumerate and repeated allocation of pt slice
             for pt_idx, pt in enumerate(X):
                 count_i = self.query_radius_distances_(
                     <DTYPE_t*>pt.data,

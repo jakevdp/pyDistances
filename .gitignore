@@ -3,3 +3,4 @@
 *.c
 build
 *.pyc
+*.html

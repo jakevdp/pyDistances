@@ -39,7 +39,7 @@ class TestBallTree:
                         'seuclidean': dict(V = (None, w,)),
                         #'cosine': {},
                         #'correlation': {},
-                        #'hamming': {},
+                        'hamming': {},
                         'chebyshev': {},
                         'canberra': {},
                         'braycurtis': {},
