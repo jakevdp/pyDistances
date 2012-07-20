@@ -913,21 +913,9 @@ cdef class BallTree(object):
                                                          n_features)
         stack_push(node_stack, item)
 
-        # create pointers to the priority-queue/max-heap functions.
-        # they both can operate on near_set_dist and near_set_indx
-        cdef DTYPE_t (*heapqueue_largest)(DTYPE_t*, ITYPE_t)
-        cdef ITYPE_t (*heapqueue_idx_largest)(ITYPE_t*, ITYPE_t)
-        cdef void (*heapqueue_insert)(DTYPE_t, ITYPE_t, DTYPE_t*,
-                                      ITYPE_t*, ITYPE_t)
-
-        if use_max_heap:
-            heapqueue_largest = &max_heap_largest
-            heapqueue_idx_largest = &max_heap_idx_largest
-            heapqueue_insert = &max_heap_insert
-        else:
-            heapqueue_largest = &pqueue_largest
-            heapqueue_idx_largest = &pqueue_idx_largest
-            heapqueue_insert = &pqueue_insert
+        # create our heapqueue object based on the value of k
+        cdef heapqueue hq
+        init_heapqueue(&hq, near_set_dist, near_set_indx, k)
 
         while(node_stack.n > 0):
             item = stack_pop(node_stack)
@@ -939,15 +927,15 @@ cdef class BallTree(object):
             #------------------------------------------------------------
             # Case 0: query point is exactly on the boundary.  Set
             #         warning flag
-            if reduced_dist_LB == heapqueue_largest(near_set_dist, k):
+            if reduced_dist_LB == hq.largest(&hq):
                 # store index of point with same distance:
                 # we'll check it later
-                check_index = heapqueue_idx_largest(near_set_indx, k)
+                check_index = hq.idx_largest(&hq)
                 continue
 
             #------------------------------------------------------------
             # Case 1: query point is outside node radius
-            elif reduced_dist_LB > heapqueue_largest(near_set_dist, k):
+            elif reduced_dist_LB > hq.largest(&hq):
                 continue
 
             #------------------------------------------------------------
@@ -958,17 +946,15 @@ cdef class BallTree(object):
                         pt, data + n_features * idx_array[i], n_features,
                         &self.dm.params, -1, -1)
 
-                    dmax = heapqueue_largest(near_set_dist, k)
+                    dmax = hq.largest(&hq)
 
                     if dist_pt == dmax:
-                        check_index = heapqueue_idx_largest(near_set_indx, k)
+                        check_index = hq.idx_largest(&hq)
 
                     elif dist_pt < dmax:
-                        heapqueue_insert(dist_pt, idx_array[i],
-                                         near_set_dist, near_set_indx, k)
-                        if dmax == heapqueue_largest(near_set_dist, k):
-                            check_index = heapqueue_idx_largest(near_set_indx,
-                                                                k)
+                        hq.insert(&hq, dist_pt, idx_array[i])
+                        if dmax == hq.largest(&hq):
+                            check_index = hq.idx_largest(&hq)
 
             #------------------------------------------------------------
             # Case 3: Node is not a leaf.  Recursively query subnodes
@@ -1002,7 +988,7 @@ cdef class BallTree(object):
                     item.reduced_dist_LB = reduced_dist_LB_1
                     stack_push(node_stack, item)
 
-        if check_index == heapqueue_idx_largest(near_set_indx, k):
+        if check_index == hq.idx_largest(&hq):
             self.warning_flag = True
 
         for i from 0 <= i < k:
@@ -1351,31 +1337,64 @@ cdef void partition_indices(DTYPE_t* data,
 
 
 ######################################################################
+# heapqueue struct
+#
+#  We want to choose between a max_heap implementation and a
+#  queue implementation in a way that will be fast (i.e. python
+#  polymorphism is out of the question).  We'll do this through
+#  a heapqueue structure.  The general struct will be defined here,
+#  and the different versions of the functions will be specified
+#  below.
+cdef struct heapqueue:
+    DTYPE_t* val
+    ITYPE_t* idx
+    ITYPE_t size
+
+    DTYPE_t (*largest)(heapqueue*)
+    ITYPE_t (*idx_largest)(heapqueue*)
+    void (*insert)(heapqueue*, DTYPE_t, ITYPE_t)
+
+cdef void init_heapqueue(heapqueue* hq,
+                         DTYPE_t* val,
+                         ITYPE_t* idx,
+                         ITYPE_t size):
+    hq.val = val
+    hq.idx = idx
+    hq.size = size
+
+    if (hq.size >= 5):
+        hq.largest = &max_heap_largest
+        hq.idx_largest = &max_heap_idx_largest
+        hq.insert = &max_heap_insert
+    else:
+        hq.largest = &pqueue_largest
+        hq.idx_largest = &pqueue_idx_largest
+        hq.insert = &pqueue_insert
+
+######################################################################
 # priority queue
 #  This is used to keep track of the neighbors as they are found.
 #  It keeps the list of neighbors sorted, and inserts each new item
 #  into the list.  In this fixed-size implementation, empty elements
 #  are represented by infinities.
 @cython.profile(False)
-cdef inline DTYPE_t pqueue_largest(DTYPE_t* queue, ITYPE_t queue_size):
-    return queue[queue_size - 1]
+cdef inline DTYPE_t pqueue_largest(heapqueue* hq):
+    return hq.val[hq.size - 1]
 
 
-cdef inline ITYPE_t pqueue_idx_largest(ITYPE_t* idx_array, ITYPE_t queue_size):
-    return idx_array[queue_size - 1]
+cdef inline ITYPE_t pqueue_idx_largest(heapqueue* hq):
+    return hq.idx[hq.size - 1]
 
 
-cdef inline void pqueue_insert(DTYPE_t val, ITYPE_t i_val,
-                               DTYPE_t* queue, ITYPE_t* idx_array,
-                               ITYPE_t queue_size):
+cdef inline void pqueue_insert(heapqueue* hq, DTYPE_t val, ITYPE_t i_val):
     cdef ITYPE_t i_lower = 0
-    cdef ITYPE_t i_upper = queue_size - 1
+    cdef ITYPE_t i_upper = hq.size - 1
     cdef ITYPE_t i_mid
     cdef ITYPE_t i
 
-    if val >= queue[i_upper]:
+    if val >= hq.val[i_upper]:
         return
-    elif val <= queue[i_lower]:
+    elif val <= hq.val[i_lower]:
         i_mid = i_lower
     else:
         while True:
@@ -1389,18 +1408,17 @@ cdef inline void pqueue_insert(DTYPE_t val, ITYPE_t i_val,
                 i_mid += 1
                 break
 
-            if val >= queue[i_mid]:
+            if val >= hq.val[i_mid]:
                 i_lower = i_mid
             else:
                 i_upper = i_mid
 
-    for i from queue_size > i > i_mid:
-        queue[i] = queue[i - 1]
-        idx_array[i] = idx_array[i - 1]
+    for i from hq.size > i > i_mid:
+        hq.val[i] = hq.val[i - 1]
+        hq.idx[i] = hq.idx[i - 1]
 
-    queue[i_mid] = val
-    idx_array[i_mid] = i_val
-
+    hq.val[i_mid] = val
+    hq.idx[i_mid] = i_val
 
 ######################################################################
 # max_heap
@@ -1425,29 +1443,26 @@ cdef inline void pqueue_insert(DTYPE_t val, ITYPE_t i_val,
 #  As part of this implementation, there is a quicksort provided with
 #  `sort_dist_idx()`
 @cython.profile(False)
-cdef inline DTYPE_t max_heap_largest(DTYPE_t* heap, ITYPE_t k):
-    return heap[0]
+cdef inline DTYPE_t max_heap_largest(heapqueue* hq):
+    return hq.val[0]
 
 
 @cython.profile(False)
-cdef inline ITYPE_t max_heap_idx_largest(ITYPE_t* idx_array, ITYPE_t k):
-    return idx_array[0]
+cdef inline ITYPE_t max_heap_idx_largest(heapqueue* hq):
+    return hq.idx[0]
 
 
-cdef void max_heap_insert(DTYPE_t val, ITYPE_t i_val,
-                          DTYPE_t* heap,
-                          ITYPE_t* idx_array,
-                          ITYPE_t heap_size):
+cdef void max_heap_insert(heapqueue* hq, DTYPE_t val, ITYPE_t i_val):
     cdef ITYPE_t i, ic1, ic2, i_tmp
     cdef DTYPE_t d_tmp
 
     # check if val should be in heap
-    if val > heap[0]:
+    if val > hq.val[0]:
         return
 
     # insert val at position zero
-    heap[0] = val
-    idx_array[0] = i_val
+    hq.val[0] = val
+    hq.idx[0] = i_val
 
     #descend the heap, swapping values until the max heap criterion is met
     i = 0
@@ -1455,63 +1470,62 @@ cdef void max_heap_insert(DTYPE_t val, ITYPE_t i_val,
         ic1 = 2 * i + 1
         ic2 = ic1 + 1
 
-        if ic1 >= heap_size:
+        if ic1 >= hq.size:
             break
-        elif ic2 >= heap_size:
-            if heap[ic1] > val:
+        elif ic2 >= hq.size:
+            if hq.val[ic1] > val:
                 i_swap = ic1
             else:
                 break
-        elif heap[ic1] >= heap[ic2]:
-            if val < heap[ic1]:
+        elif hq.val[ic1] >= hq.val[ic2]:
+            if val < hq.val[ic1]:
                 i_swap = ic1
             else:
                 break
         else:
-            if val < heap[ic2]:
+            if val < hq.val[ic2]:
                 i_swap = ic2
             else:
                 break
 
-        heap[i] = heap[i_swap]
-        idx_array[i] = idx_array[i_swap]
+        hq.val[i] = hq.val[i_swap]
+        hq.idx[i] = hq.idx[i_swap]
 
         i = i_swap
 
-    heap[i] = val
-    idx_array[i] = i_val
+    hq.val[i] = val
+    hq.idx[i] = i_val
 
 
 ######################################################################
 # sort_dist_idx :
-#  this is a quicksort implementation which sorts `dist` and
+#  this is a recursive quicksort implementation which sorts `dist` and
 #  simultaneously performs the same swaps on `idx`.
 cdef void sort_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
-    cdef ITYPE_t pivot_idx
+    cdef ITYPE_t pivot_idx, store_idx, i
+    cdef DTYPE_t pivot_val
+
     if k > 1:
-        pivot_idx = partition_dist_idx(dist, idx, k)
+        #-- determine pivot -----------
+        pivot_idx = k / 2
+        pivot_val = dist[pivot_idx]
+        store_idx = 0
+                         
+        dswap(dist, pivot_idx, k - 1)
+        iswap(idx, pivot_idx, k - 1)
+
+        for i from 0 <= i < k - 1:
+            if dist[i] < pivot_val:
+                dswap(dist, i, store_idx)
+                iswap(idx, i, store_idx)
+                store_idx += 1
+        dswap(dist, store_idx, k - 1)
+        iswap(idx, store_idx, k - 1)
+        pivot_idx = store_idx
+        #------------------------------
 
         sort_dist_idx(dist, idx, pivot_idx)
 
         sort_dist_idx(dist + pivot_idx + 1,
                       idx + pivot_idx + 1,
                       k - pivot_idx - 1)
-
-
-cdef ITYPE_t partition_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
-    cdef ITYPE_t pivot_idx = k / 2
-    cdef DTYPE_t pivot_val = dist[pivot_idx]
-    cdef ITYPE_t store_idx = 0
-    cdef ITYPE_t i
-
-    dswap(dist, pivot_idx, k - 1)
-    iswap(idx, pivot_idx, k - 1)
-
-    for i from 0 <= i < k - 1:
-        if dist[i] < pivot_val:
-            dswap(dist, i, store_idx)
-            iswap(idx, i, store_idx)
-            store_idx += 1
-    dswap(dist, store_idx, k - 1)
-    iswap(idx, store_idx, k - 1)
-    return store_idx
