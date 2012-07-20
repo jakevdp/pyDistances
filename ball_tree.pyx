@@ -559,10 +559,6 @@ cdef class BallTree(object):
         orig_shape = X.shape
         X = X.reshape((-1, X.shape[-1]))
 
-        # for k less than 5, a priority queue is slightly faster
-        # for more neighbors, a max-heap implementation is faster
-        cdef ITYPE_t use_max_heap = (k >= 5)
-
         cdef ITYPE_t i
         cdef ITYPE_t n_neighbors = k
         cdef np.ndarray distances = np.empty((X.shape[0], n_neighbors),
@@ -576,16 +572,17 @@ cdef class BallTree(object):
         cdef DTYPE_t* dist_ptr = <DTYPE_t*> distances.data
         cdef ITYPE_t* idx_ptr = <ITYPE_t*> idx_array.data
 
+        # create heapqueue object for holding results
+        cdef heapqueue hq
+        init_heapqueue(&hq, dist_ptr, idx_ptr, n_neighbors)
+
+        # create node stack for keeping track of recursion
         cdef stack node_stack
         stack_create(&node_stack, self.n_levels + 1)
 
         for i, Xi in enumerate(X):
             self.query_one_(<DTYPE_t*>Xi.data, n_neighbors,
-                             dist_ptr, idx_ptr, &node_stack, use_max_heap)
-
-            # if max-heap is used, results must be sorted
-            if use_max_heap:
-                sort_dist_idx(dist_ptr, idx_ptr, n_neighbors)
+                             dist_ptr, idx_ptr, &node_stack, &hq)
 
             dist_ptr += n_neighbors
             idx_ptr += n_neighbors
@@ -887,7 +884,7 @@ cdef class BallTree(object):
                          DTYPE_t* near_set_dist,
                          ITYPE_t* near_set_indx,
                          stack* node_stack,
-                         ITYPE_t use_max_heap):
+                         heapqueue* hq):
         cdef DTYPE_t* data = <DTYPE_t*> self.data.data
         cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
         cdef DTYPE_t* node_centroid_arr = <DTYPE_t*>self.node_centroid_arr.data
@@ -907,15 +904,14 @@ cdef class BallTree(object):
         # then the warning flag will be set.
         cdef ITYPE_t check_index = -1
 
+        hq.val = near_set_dist
+        hq.idx = near_set_indx
+
         item.i_node = 0
         item.reduced_dist_LB = self.calc_reduced_dist_LB(pt, node_centroid_arr,
                                                          node_info.radius,
                                                          n_features)
         stack_push(node_stack, item)
-
-        # create our heapqueue object based on the value of k
-        cdef heapqueue hq
-        init_heapqueue(&hq, near_set_dist, near_set_indx, k)
 
         while(node_stack.n > 0):
             item = stack_pop(node_stack)
@@ -927,15 +923,15 @@ cdef class BallTree(object):
             #------------------------------------------------------------
             # Case 0: query point is exactly on the boundary.  Set
             #         warning flag
-            if reduced_dist_LB == hq.largest(&hq):
+            if reduced_dist_LB == hq.largest(hq):
                 # store index of point with same distance:
                 # we'll check it later
-                check_index = hq.idx_largest(&hq)
+                check_index = hq.idx_largest(hq)
                 continue
 
             #------------------------------------------------------------
             # Case 1: query point is outside node radius
-            elif reduced_dist_LB > hq.largest(&hq):
+            elif reduced_dist_LB > hq.largest(hq):
                 continue
 
             #------------------------------------------------------------
@@ -946,15 +942,15 @@ cdef class BallTree(object):
                         pt, data + n_features * idx_array[i], n_features,
                         &self.dm.params, -1, -1)
 
-                    dmax = hq.largest(&hq)
+                    dmax = hq.largest(hq)
 
                     if dist_pt == dmax:
-                        check_index = hq.idx_largest(&hq)
+                        check_index = hq.idx_largest(hq)
 
                     elif dist_pt < dmax:
-                        hq.insert(&hq, dist_pt, idx_array[i])
-                        if dmax == hq.largest(&hq):
-                            check_index = hq.idx_largest(&hq)
+                        hq.insert(hq, dist_pt, idx_array[i])
+                        if dmax == hq.largest(hq):
+                            check_index = hq.idx_largest(hq)
 
             #------------------------------------------------------------
             # Case 3: Node is not a leaf.  Recursively query subnodes
@@ -988,12 +984,16 @@ cdef class BallTree(object):
                     item.reduced_dist_LB = reduced_dist_LB_1
                     stack_push(node_stack, item)
 
-        if check_index == hq.idx_largest(&hq):
+        if check_index == hq.idx_largest(hq):
             self.warning_flag = True
 
         for i from 0 <= i < k:
             near_set_dist[i] = self.dm.reduced_to_dist(near_set_dist[i],
                                                        &self.dm.params)
+
+        # if max-heap is used, results must be sorted
+        if hq.use_max_heap:
+            sort_dist_idx(hq.val, hq.idx, hq.size)
 
     cdef ITYPE_t query_radius_count_(BallTree self,
                                      DTYPE_t* pt, DTYPE_t r,
@@ -1349,6 +1349,7 @@ cdef struct heapqueue:
     DTYPE_t* val
     ITYPE_t* idx
     ITYPE_t size
+    ITYPE_t use_max_heap
 
     DTYPE_t (*largest)(heapqueue*)
     ITYPE_t (*idx_largest)(heapqueue*)
@@ -1363,10 +1364,12 @@ cdef void init_heapqueue(heapqueue* hq,
     hq.size = size
 
     if (hq.size >= 5):
+        use_max_heap = 1
         hq.largest = &max_heap_largest
         hq.idx_largest = &max_heap_idx_largest
         hq.insert = &max_heap_insert
     else:
+        use_max_heap = 0
         hq.largest = &pqueue_largest
         hq.idx_largest = &pqueue_idx_largest
         hq.insert = &pqueue_insert
