@@ -1372,12 +1372,12 @@ cdef void init_heapqueue(heapqueue* hq,
     hq.size = size
 
     if (hq.size >= 5):
-        use_max_heap = 1
+        hq.use_max_heap = 1
         hq.largest = &max_heap_largest
         hq.idx_largest = &max_heap_idx_largest
         hq.insert = &max_heap_insert
     else:
-        use_max_heap = 0
+        hq.use_max_heap = 0
         hq.largest = &pqueue_largest
         hq.idx_largest = &pqueue_idx_largest
         hq.insert = &pqueue_insert
