@@ -510,9 +510,13 @@ cdef class BallTree(object):
         cdef DTYPE_t* dist_ptr = <DTYPE_t*> distances.data
         cdef ITYPE_t* idx_ptr = <ITYPE_t*> idx_array.data
 
-        # create heapqueue object for holding results
-        cdef heapqueue hq
-        init_heapqueue(&hq, dist_ptr, idx_ptr, n_neighbors)
+        # create heap/queue object for holding results
+        cdef HeapBase hq
+        if n_neighbors >= 5:
+            hq = MaxHeap()
+        else:
+            hq = PriorityQueue()
+        hq.init(dist_ptr, idx_ptr, n_neighbors)
 
         # create node stack for keeping track of recursion
         cdef stack node_stack
@@ -522,7 +526,7 @@ cdef class BallTree(object):
         # creating all the Xi sub-arrays
         for i, Xi in enumerate(X):
             self.query_one_(<DTYPE_t*>Xi.data, n_neighbors,
-                             dist_ptr, idx_ptr, &node_stack, &hq)
+                             dist_ptr, idx_ptr, &node_stack, hq)
 
             dist_ptr += n_neighbors
             idx_ptr += n_neighbors
@@ -830,7 +834,7 @@ cdef class BallTree(object):
                          DTYPE_t* near_set_dist,
                          ITYPE_t* near_set_indx,
                          stack* node_stack,
-                         heapqueue* hq):
+                         HeapBase hq):
         cdef DTYPE_t* data = <DTYPE_t*> self.data.data
         cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
         cdef DTYPE_t* node_centroid_arr = <DTYPE_t*>self.node_centroid_arr.data
@@ -869,15 +873,15 @@ cdef class BallTree(object):
             #------------------------------------------------------------
             # Case 0: query point is exactly on the boundary.  Set
             #         warning flag
-            if reduced_dist_LB == hq.largest(hq):
+            if reduced_dist_LB == hq.largest():
                 # store index of point with same distance:
                 # we'll check it later
-                check_index = hq.idx_largest(hq)
+                check_index = hq.idx_largest()
                 continue
 
             #------------------------------------------------------------
             # Case 1: query point is outside node radius
-            elif reduced_dist_LB > hq.largest(hq):
+            elif reduced_dist_LB > hq.largest():
                 continue
 
             #------------------------------------------------------------
@@ -888,15 +892,15 @@ cdef class BallTree(object):
                         pt, data + n_features * idx_array[i], n_features,
                         &self.dm.params, -1, -1)
 
-                    dmax = hq.largest(hq)
+                    dmax = hq.largest()
 
                     if dist_pt == dmax:
-                        check_index = hq.idx_largest(hq)
+                        check_index = hq.idx_largest()
 
                     elif dist_pt < dmax:
-                        hq.insert(hq, dist_pt, idx_array[i])
-                        if dmax == hq.largest(hq):
-                            check_index = hq.idx_largest(hq)
+                        hq.insert(dist_pt, idx_array[i])
+                        if dmax == hq.largest():
+                            check_index = hq.idx_largest()
 
             #------------------------------------------------------------
             # Case 3: Node is not a leaf.  Recursively query subnodes
@@ -930,7 +934,7 @@ cdef class BallTree(object):
                     item.reduced_dist_LB = reduced_dist_LB_1
                     stack_push(node_stack, item)
 
-        if check_index == hq.idx_largest(hq):
+        if check_index == hq.idx_largest():
             self.warning_flag = True
 
         for i from 0 <= i < k:
@@ -938,7 +942,7 @@ cdef class BallTree(object):
                                                        &self.dm.params)
 
         # if max-heap is used, results must be sorted
-        if hq.use_max_heap:
+        if hq.needs_final_sort():
             sort_dist_idx(hq.val, hq.idx, hq.size)
 
     cdef ITYPE_t query_radius_count_(BallTree self,
@@ -1281,171 +1285,6 @@ cdef void partition_indices(DTYPE_t* data,
         else:
             right = midindex - 1
 
-
-######################################################################
-# heapqueue struct
-#
-#  We want to choose between a max_heap implementation and a
-#  queue implementation in a way that will be fast (i.e. python
-#  polymorphism is out of the question).  We'll do this through
-#  a heapqueue structure.  The general struct will be defined here,
-#  and the different versions of the functions will be specified
-#  below.
-cdef struct heapqueue:
-    DTYPE_t* val
-    ITYPE_t* idx
-    ITYPE_t size
-    ITYPE_t use_max_heap
-
-    DTYPE_t (*largest)(heapqueue*)
-    ITYPE_t (*idx_largest)(heapqueue*)
-    void (*insert)(heapqueue*, DTYPE_t, ITYPE_t)
-
-cdef void init_heapqueue(heapqueue* hq,
-                         DTYPE_t* val,
-                         ITYPE_t* idx,
-                         ITYPE_t size):
-    hq.val = val
-    hq.idx = idx
-    hq.size = size
-
-    if (hq.size >= 5):
-        hq.use_max_heap = 1
-        hq.largest = &max_heap_largest
-        hq.idx_largest = &max_heap_idx_largest
-        hq.insert = &max_heap_insert
-    else:
-        hq.use_max_heap = 0
-        hq.largest = &pqueue_largest
-        hq.idx_largest = &pqueue_idx_largest
-        hq.insert = &pqueue_insert
-
-######################################################################
-# priority queue
-#  This is used to keep track of the neighbors as they are found.
-#  It keeps the list of neighbors sorted, and inserts each new item
-#  into the list.  In this fixed-size implementation, empty elements
-#  are represented by infinities.
-@cython.profile(False)
-cdef inline DTYPE_t pqueue_largest(heapqueue* hq):
-    return hq.val[hq.size - 1]
-
-
-cdef inline ITYPE_t pqueue_idx_largest(heapqueue* hq):
-    return hq.idx[hq.size - 1]
-
-
-cdef inline void pqueue_insert(heapqueue* hq, DTYPE_t val, ITYPE_t i_val):
-    cdef ITYPE_t i_lower = 0
-    cdef ITYPE_t i_upper = hq.size - 1
-    cdef ITYPE_t i_mid
-    cdef ITYPE_t i
-
-    if val >= hq.val[i_upper]:
-        return
-    elif val <= hq.val[i_lower]:
-        i_mid = i_lower
-    else:
-        while True:
-            if (i_upper - i_lower) < 2:
-                i_mid = i_lower + 1
-                break
-            else:
-                i_mid = (i_lower + i_upper) / 2
-
-            if i_mid == i_lower:
-                i_mid += 1
-                break
-
-            if val >= hq.val[i_mid]:
-                i_lower = i_mid
-            else:
-                i_upper = i_mid
-
-    for i from hq.size > i > i_mid:
-        hq.val[i] = hq.val[i - 1]
-        hq.idx[i] = hq.idx[i - 1]
-
-    hq.val[i_mid] = val
-    hq.idx[i_mid] = i_val
-
-######################################################################
-# max_heap
-#
-#  This is a basic implementation of a fixed-size binary max-heap.
-#  It can be used in place of priority_queue to keep track of the
-#  k-nearest neighbors in a query.  The implementation is faster than
-#  priority_queue for a very large number of neighbors (k > 50 or so).
-#  The implementation is slower than priority_queue for fewer neighbors.
-#  The other disadvantage is that for max_heap, the indices/distances must
-#  be sorted upon completion of the query.  In priority_queue, the indices
-#  and distances are sorted without an extra call.
-#
-#  The root node is at heap[0].  The two child nodes of node i are at
-#  (2 * i + 1) and (2 * i + 2).
-#  The parent node of node i is node floor((i-1)/2).  Node 0 has no parent.
-#  A max heap has (heap[i] >= heap[2 * i + 1]) and (heap[i] >= heap[2 * i + 2])
-#  for all valid indices.
-#
-#  In this implementation, an empty heap should be full of infinities
-#
-#  As part of this implementation, there is a quicksort provided with
-#  `sort_dist_idx()`
-@cython.profile(False)
-cdef inline DTYPE_t max_heap_largest(heapqueue* hq):
-    return hq.val[0]
-
-
-@cython.profile(False)
-cdef inline ITYPE_t max_heap_idx_largest(heapqueue* hq):
-    return hq.idx[0]
-
-
-cdef void max_heap_insert(heapqueue* hq, DTYPE_t val, ITYPE_t i_val):
-    cdef ITYPE_t i, ic1, ic2, i_tmp
-    cdef DTYPE_t d_tmp
-
-    # check if val should be in heap
-    if val > hq.val[0]:
-        return
-
-    # insert val at position zero
-    hq.val[0] = val
-    hq.idx[0] = i_val
-
-    #descend the heap, swapping values until the max heap criterion is met
-    i = 0
-    while 1:
-        ic1 = 2 * i + 1
-        ic2 = ic1 + 1
-
-        if ic1 >= hq.size:
-            break
-        elif ic2 >= hq.size:
-            if hq.val[ic1] > val:
-                i_swap = ic1
-            else:
-                break
-        elif hq.val[ic1] >= hq.val[ic2]:
-            if val < hq.val[ic1]:
-                i_swap = ic1
-            else:
-                break
-        else:
-            if val < hq.val[ic2]:
-                i_swap = ic2
-            else:
-                break
-
-        hq.val[i] = hq.val[i_swap]
-        hq.idx[i] = hq.idx[i_swap]
-
-        i = i_swap
-
-    hq.val[i] = val
-    hq.idx[i] = i_val
-
-
 ######################################################################
 # sort_dist_idx :
 #  this is a recursive quicksort implementation which sorts `dist` and
@@ -1478,3 +1317,161 @@ cdef void sort_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
         sort_dist_idx(dist + pivot_idx + 1,
                       idx + pivot_idx + 1,
                       k - pivot_idx - 1)
+
+
+######################################################################
+# heap implementation
+#
+# We use an inheritance structure to allow multiple implementations with
+# the same interface.  As long as each derived class only overloads functions
+# in the base class rather than defining new functions, this will allow
+# very fast execution.
+
+#----------------------------------------------------------------------
+# Heap base class
+cdef class HeapBase:
+    cdef DTYPE_t* val
+    cdef ITYPE_t* idx
+    cdef ITYPE_t size
+
+    cdef int needs_final_sort(self):
+        return 0
+
+    cdef void init(self, DTYPE_t* val, ITYPE_t* idx, ITYPE_t size):
+        self.val = val
+        self.idx = idx
+        self.size = size
+
+    cdef DTYPE_t largest(self):
+        return 0.0
+
+    cdef ITYPE_t idx_largest(self):
+        return 0
+
+    cdef void insert(self, DTYPE_t val, ITYPE_t i_val):
+        pass
+
+#----------------------------------------------------------------------
+# MaxHeap
+#
+#  This is a basic implementation of a fixed-size binary max-heap.
+#  It can be used in place of priority_queue to keep track of the
+#  k-nearest neighbors in a query.  The implementation is faster than
+#  priority_queue for a very large number of neighbors (k > 50 or so).
+#  The implementation is slower than priority_queue for fewer neighbors.
+#  The other disadvantage is that for max_heap, the indices/distances must
+#  be sorted upon completion of the query.  In priority_queue, the indices
+#  and distances are sorted without an extra call.
+#
+#  The root node is at heap[0].  The two child nodes of node i are at
+#  (2 * i + 1) and (2 * i + 2).
+#  The parent node of node i is node floor((i-1)/2).  Node 0 has no parent.
+#  A max heap has (heap[i] >= heap[2 * i + 1]) and (heap[i] >= heap[2 * i + 2])
+#  for all valid indices.
+#
+#  In this implementation, an empty heap should be full of infinities
+#
+cdef class MaxHeap(HeapBase):
+    cdef int needs_final_sort(self):
+        return 1
+
+    cdef DTYPE_t largest(self):
+        return self.val[0]
+
+    cdef ITYPE_t idx_largest(self):
+        return self.idx[0]
+
+    cdef void insert(self, DTYPE_t val, ITYPE_t i_val):
+        cdef ITYPE_t i, ic1, ic2, i_tmp
+        cdef DTYPE_t d_tmp
+
+        # check if val should be in heap
+        if val > self.val[0]:
+            return
+
+        # insert val at position zero
+        self.val[0] = val
+        self.idx[0] = i_val
+
+        #descend the heap, swapping values until the max heap criterion is met
+        i = 0
+        while 1:
+            ic1 = 2 * i + 1
+            ic2 = ic1 + 1
+
+            if ic1 >= self.size:
+                break
+            elif ic2 >= self.size:
+                if self.val[ic1] > val:
+                    i_swap = ic1
+                else:
+                    break
+            elif self.val[ic1] >= self.val[ic2]:
+                if val < self.val[ic1]:
+                    i_swap = ic1
+                else:
+                    break
+            else:
+                if val < self.val[ic2]:
+                    i_swap = ic2
+                else:
+                    break
+
+            self.val[i] = self.val[i_swap]
+            self.idx[i] = self.idx[i_swap]
+
+            i = i_swap
+
+        self.val[i] = val
+        self.idx[i] = i_val
+
+
+#----------------------------------------------------------------------
+# Priority Queue Implementation
+#
+#  This is used to keep track of the neighbors as they are found.
+#  It keeps the list of neighbors sorted, and inserts each new item
+#  into the list.  In this fixed-size implementation, empty elements
+#  are represented by infinities.
+cdef class PriorityQueue(HeapBase):
+    cdef int needs_final_sort(self):
+        return 0
+
+    cdef DTYPE_t largest(self):
+        return self.val[self.size - 1]
+
+    cdef ITYPE_t pqueue_idx_largest(self):
+        return self.idx[self.size - 1]
+
+    cdef void insert(self, DTYPE_t val, ITYPE_t i_val):
+        cdef ITYPE_t i_lower = 0
+        cdef ITYPE_t i_upper = self.size - 1
+        cdef ITYPE_t i, i_mid
+
+        if val >= self.val[i_upper]:
+            return
+        elif val <= self.val[i_lower]:
+            i_mid = i_lower
+        else:
+            while True:
+                if (i_upper - i_lower) < 2:
+                    i_mid = i_lower + 1
+                    break
+                else:
+                    i_mid = (i_lower + i_upper) / 2
+
+                if i_mid == i_lower:
+                    i_mid += 1
+                    break
+
+                if val >= self.val[i_mid]:
+                    i_lower = i_mid
+                else:
+                    i_upper = i_mid
+
+        for i from self.size > i > i_mid:
+            self.val[i] = self.val[i - 1]
+            self.idx[i] = self.idx[i - 1]
+
+        self.val[i_mid] = val
+        self.idx[i_mid] = i_val
