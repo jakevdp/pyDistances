@@ -61,13 +61,17 @@ class TestBallTree:
         dist_bt, ind_bt = bt.query(self.X, k=k)
         dist_kd, ind_kd = kdt.query(self.X, k=k)
 
+        if k == 1:
+            dist_kd = dist_kd[:, None]
+            ind_kd = ind_kd[:, None]
+
         assert_array_almost_equal(dist_bt, dist_kd)
         assert_array_almost_equal(ind_bt, ind_kd)
 
     def test_query_knn(self):
         bt = BallTree(self.X)
         kdt = cKDTree(self.X)
-        for k in (2, 4, 6):
+        for k in (1, 2, 4, 8):
             yield (self._check_query_knn, bt, kdt, k)
 
     def _check_metrics_float(self, k, metric, kwargs):

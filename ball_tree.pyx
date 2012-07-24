@@ -502,10 +502,6 @@ cdef class BallTree(object):
             heap = PriorityQueue()
         heap.init(dist_ptr, idx_ptr, n_neighbors)
 
-        # create node stack for keeping track of recursion
-        #cdef stack node_stack
-        #stack_create(&node_stack, self.n_levels + 1)
-
         # TODO: this loop could be sped up with some cdefs to avoid
         # creating all the Xi sub-arrays
         for i, Xi in enumerate(X):
@@ -723,8 +719,8 @@ cdef class BallTree(object):
         for i from node_info.idx_start <= i < node_info.idx_end:
             radius = fmax(radius,
                           self.dm.reduced_dfunc(
-                    centroid, data + n_features * idx_array[i],
-                    n_features, &self.dm.params, -1, -1))
+                                  centroid, data + n_features * idx_array[i],
+                                  n_features, &self.dm.params, -1, -1))
         node_info.radius = self.dm.reduced_to_dist(radius, &self.dm.params)
 
         # check if this is a leaf
@@ -755,8 +751,9 @@ cdef class BallTree(object):
             node_info = node_info_arr + i_node
 
             if parent_info.is_leaf:
-                raise ValueError("Fatal: parent is a leaf. Memory "
-                                 "allocation is flawed")
+                # sanity check.  This should never happen
+                raise ValueError("Fatal: parent is a leaf. "
+                                 "Memory layout is flawed")
 
             if i_node < self.n_nodes / 2:
                 node_info.is_leaf = 0
@@ -780,7 +777,9 @@ cdef class BallTree(object):
             n_points = idx_end - idx_start
 
             if n_points == 0:
-                raise ValueError("zero-sized node")
+                # sanity check: this should never happen
+                raise ValueError("Fatal: zero-sized node. "
+                                 "Memory layout is flawed")
 
             elif n_points == 1:
                 #copy this point to centroid
@@ -1092,6 +1091,8 @@ cdef class BallTree(object):
                 stack_push(node_stack, item)
 
         return idx_i
+
+    
 
     ########################################################################
     # calc_dist_LB
