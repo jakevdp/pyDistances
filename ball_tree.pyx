@@ -155,7 +155,7 @@ import numpy as np
 cimport numpy as np
 cimport cython
 from libc cimport stdlib
-from libc.math cimport fabs, fmax, fmin, sqrt, pow
+from libc.math cimport fmax, fmin
 
 from distmetrics cimport DistanceMetric, DTYPE_t
 from distmetrics import DTYPE
@@ -169,10 +169,6 @@ from sklearn.utils import array2d
 # warning: there will be problems if this is switched to an unsigned type!
 ITYPE = np.int32
 ctypedef np.int32_t ITYPE_t
-
-# infinity
-cdef DTYPE_t infinity = np.inf
-
 
 ######################################################################
 # NodeInfo struct
@@ -304,14 +300,6 @@ cdef class BallTree(object):
     data : np.ndarray
         The training data
 
-    warning_flag : bool
-        Warning flag is set to true during query(...) if results are
-        dependent on the order of the training cases.
-        For classification or regression based on k-neighbors, if
-        neighbor k and neighbor k+1 have identical distances but different
-        labels, then the result will be dependent on the ordering of the
-        training data.  In this case, ``warning_flag`` will be set to True.
-
     Examples
     --------
     Query for k-nearest neighbors
@@ -344,7 +332,6 @@ cdef class BallTree(object):
         # [ 0.          0.19662693  0.29473397]
     """
     cdef readonly np.ndarray data
-    cdef readonly int warning_flag
     cdef np.ndarray idx_array
     cdef np.ndarray node_centroid_arr
     cdef np.ndarray node_info_arr
@@ -370,9 +357,8 @@ cdef class BallTree(object):
             raise ValueError("metric %s does not satisfy the triangle "
                              "inequality: BallTree cannot be used")
         self.data = np.asarray(X, dtype=DTYPE, order='C')
-        self.warning_flag = True
 
-        if X.size == 0:
+        if self.data.size == 0:
             raise ValueError("X is an empty array")
 
         if self.data.ndim != 2:
@@ -392,7 +378,7 @@ cdef class BallTree(object):
 
         # determine number of levels in the ball tree, and from this
         # the number of nodes in the ball tree
-        self.n_levels = np.log2(max(1, (n_samples - 1)/self.leaf_size)) + 1
+        self.n_levels = np.log2(max(1, (n_samples - 1) / self.leaf_size)) + 1
         self.n_nodes = (2 ** self.n_levels) - 1
 
         self.idx_array = np.arange(n_samples, dtype=ITYPE)
@@ -405,15 +391,11 @@ cdef class BallTree(object):
         self.build_tree_()
 
     def __reduce__(self):
-        """
-        reduce method used for pickling
-        """
+        """reduce method used for pickling"""
         return (newObj, (BallTree,), self.__getstate__())
 
     def __getstate__(self):
-        """
-        get state for pickling
-        """
+        """get state for pickling"""
         return (self.data,
                 self.idx_array,
                 self.node_centroid_arr,
@@ -424,9 +406,7 @@ cdef class BallTree(object):
                 self.dm)
 
     def __setstate__(self, state):
-        """
-        set state for pickling
-        """
+        """set state for pickling"""
         self.data = state[0]
         self.idx_array = state[1]
         self.node_centroid_arr = state[2]
@@ -444,7 +424,7 @@ cdef class BallTree(object):
 
         Parameters
         ----------
-        X : array-like, last dimension self.dim
+        X : array-like, last dimension self.n_features
             An array of points to query
         k : integer  (default = 1)
             The number of nearest neighbors to return
@@ -455,17 +435,15 @@ cdef class BallTree(object):
         Returns
         -------
         i    : if return_distance == False
-        (d,i) : if return_distance == True
+        (d, i) : if return_distance == True
 
         d : array of doubles - shape: x.shape[:-1] + (k,)
-            each entry gives the list of distances to the
+            each entry gives the sorted list of distances to the
             neighbors of the corresponding point
-            (note that distances are not sorted)
 
         i : array of integers - shape: x.shape[:-1] + (k,)
-            each entry gives the list of indices of
+            each entry gives the sorted list of indices of
             neighbors of the corresponding point
-            (note that neighbors are not sorted)
 
         Examples
         --------
@@ -481,8 +459,6 @@ cdef class BallTree(object):
             # >>> print dist  # distances to 3 closest neighbors
             # [ 0.          0.19662693  0.29473397]
         """
-        self.warning_flag = False
-
         X = array2d(X, dtype=DTYPE, order='C')
 
         if X.shape[-1] != self.data.shape[1]:
@@ -505,7 +481,7 @@ cdef class BallTree(object):
                                              dtype=ITYPE)
         cdef np.ndarray Xi
 
-        distances[:] = np.inf
+        distances.fill(np.inf)
 
         cdef DTYPE_t* pt
         cdef DTYPE_t* dist_ptr = <DTYPE_t*> distances.data
@@ -513,16 +489,18 @@ cdef class BallTree(object):
 
         cdef DTYPE_t reduced_dist_LB
         cdef NodeInfo* node_info = <NodeInfo*> self.node_info_arr.data
-        cdef DTYPE_t* node_centroid = <DTYPE_t*>self.node_centroid_arr.data
+        cdef DTYPE_t* node_centroid = <DTYPE_t*> self.node_centroid_arr.data
         cdef ITYPE_t n_features = self.data.shape[1]
         
         # create heap/queue object for holding results
-        cdef HeapBase hq
-        if n_neighbors >= 5:
-            hq = MaxHeap()
+        cdef HeapBase heap
+        if n_neighbors == 1:
+            heap = OneItemHeap()
+        elif n_neighbors >= 5:
+            heap = MaxHeap()
         else:
-            hq = PriorityQueue()
-        hq.init(dist_ptr, idx_ptr, n_neighbors)
+            heap = PriorityQueue()
+        heap.init(dist_ptr, idx_ptr, n_neighbors)
 
         # create node stack for keeping track of recursion
         #cdef stack node_stack
@@ -536,14 +514,14 @@ cdef class BallTree(object):
                                                         node_info.radius,
                                                         n_features)
             self.query_one_(0, pt, n_neighbors,
-                            dist_ptr, idx_ptr, reduced_dist_LB, hq)
+                            dist_ptr, idx_ptr, reduced_dist_LB, heap)
 
             for i from 0 <= i < k:
                 dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
                                                       &self.dm.params)
 
             # if max-heap is used, results must be sorted
-            if hq.needs_final_sort():
+            if heap.needs_final_sort():
                 sort_dist_idx(dist_ptr, idx_ptr, n_neighbors)
 
             dist_ptr += n_neighbors
@@ -851,7 +829,7 @@ cdef class BallTree(object):
                          DTYPE_t* near_set_dist,
                          ITYPE_t* near_set_indx,
                          DTYPE_t reduced_dist_LB,
-                         HeapBase hq):
+                         HeapBase heap):
         cdef DTYPE_t* data = <DTYPE_t*> self.data.data
         cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
         cdef DTYPE_t* node_centroid_arr = <DTYPE_t*>self.node_centroid_arr.data
@@ -866,12 +844,12 @@ cdef class BallTree(object):
         cdef NodeInfo* node_info = node_info_arr + i_node
 
         # set the values in the heap
-        hq.val = near_set_dist
-        hq.idx = near_set_indx
+        heap.val = near_set_dist
+        heap.idx = near_set_indx
 
         #------------------------------------------------------------
         # Case 1: query point is outside node radius trim the query
-        if reduced_dist_LB > hq.largest():
+        if reduced_dist_LB > heap.largest():
             pass
 
         #------------------------------------------------------------
@@ -882,8 +860,8 @@ cdef class BallTree(object):
                     pt, data + n_features * idx_array[i], n_features,
                     &self.dm.params, -1, -1)
 
-                if dist_pt < hq.largest():
-                    hq.insert(dist_pt, idx_array[i])
+                if dist_pt < heap.largest():
+                    heap.insert(dist_pt, idx_array[i])
 
         #------------------------------------------------------------
         # Case 3: Node is not a leaf.  Recursively query subnodes
@@ -901,14 +879,14 @@ cdef class BallTree(object):
             # recursively call query_one
             if reduced_dist_LB_1 <= reduced_dist_LB_2:
                 self.query_one_(i1, pt, k, near_set_dist, near_set_indx,
-                                reduced_dist_LB_1, hq)
+                                reduced_dist_LB_1, heap)
                 self.query_one_(i2, pt, k, near_set_dist, near_set_indx,
-                                reduced_dist_LB_2, hq)
+                                reduced_dist_LB_2, heap)
             else:
                 self.query_one_(i2, pt, k, near_set_dist, near_set_indx,
-                                reduced_dist_LB_2, hq)
+                                reduced_dist_LB_2, heap)
                 self.query_one_(i1, pt, k, near_set_dist, near_set_indx,
-                                reduced_dist_LB_1, hq)
+                                reduced_dist_LB_1, heap)
 
 
     cdef ITYPE_t query_radius_count_(BallTree self,
@@ -1441,3 +1419,24 @@ cdef class PriorityQueue(HeapBase):
 
         self.val[i_mid] = val
         self.idx[i_mid] = i_val
+
+
+#----------------------------------------------------------------------
+# One item implementation
+#
+# In the common case of a single neighbor, we can use a simple "heap" of
+# one item which is more efficient than either of the above options
+cdef class OneItemHeap(HeapBase):
+    cdef int needs_final_sort(self):
+        return 0
+
+    cdef DTYPE_t largest(self):
+        return self.val[0]
+
+    cdef ITYPE_t pqueue_idx_largest(self):
+        return self.idx[0]
+
+    cdef void insert(self, DTYPE_t val, ITYPE_t i_val):
+        if val < self.val[0]:
+            self.val[0] = val
+            self.idx[0] = i_val

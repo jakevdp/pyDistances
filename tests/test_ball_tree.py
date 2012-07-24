@@ -81,10 +81,8 @@ class TestBallTree:
         dist_dm = D[np.arange(self.X.shape[0])[:, None], ind_dm]
 
         # we don't check the indices here because if there is a tie for
-        # nearest neighbor, then the test may fail.  Distances will be
-        # in either case.
-        #assert_array_almost_equal(ind_bt, ind_dm)
-
+        # nearest neighbor, then the test may fail.  Distances will reflect
+        # whether the search was successful
         assert_array_almost_equal(dist_bt, dist_dm)
     
     def test_metrics_float(self, k=5):    
@@ -107,8 +105,6 @@ class TestBallTree:
         # we don't check the indices here because there are very often
         # ties for nearest neighbors, which cause the test to fail.
         # Distances will be correct in either case.
-        #assert_array_almost_equal(ind_bt, ind_dm)
-
         assert_array_almost_equal(dist_bt, dist_dm)
 
     def test_ball_tree_metrics_bool(self, k=3):    
