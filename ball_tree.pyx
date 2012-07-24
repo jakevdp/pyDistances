@@ -67,68 +67,6 @@ few disadvantages, however: once the tree is built, augmenting or pruning it
 is not as straightforward.  Also, the size of the tree must be known from the
 start, so there is not as much flexibility in building it.
 
-BallTree Pseudo-code
-~~~~~~~~~~~~~~~~~~~~
-Because understanding a ball tree is simpler with recursive code, here is some
-pseudo-code to show the structure of the main functionality
-
-    # Ball Tree pseudo code
-
-    class Node:
-        #class data:
-        centroid
-        radius
-        child1, child2
-
-        #class methods:
-        def construct(data):
-            centroid = compute_centroid(data)
-            radius = compute_radius(centroid, data)
-
-            # Divide the data into two approximately equal sets.
-            # This is often done by splitting along a single dimension.
-            data1, data2 = divide(data)
-
-            if number_of_points(data1) > 0:
-                child1.construct(data1)
-
-            if number_of_points(data2) > 0:
-                child2.construct(data2)
-
-        def query(pt, neighbors_heap):
-            # compute the minimum distance from pt to any point in this node
-            d = distance(point, centroid)
-            if d < radius:
-                min_distance = 0
-            else:
-                min_distance = d - radius
-
-            if min_distance > max_distance_in(neighbors_heap):
-                # all these points are too far away.  cut off the search here
-                return
-            elif node_size > 1:
-                child1.query(pt, neighbors_heap)
-                child2.query(pt, neighbors_heap)
-
-
-    object BallTree:
-        #class data:
-        data
-        root_node
-
-        #class methods
-        def construct(data, num_leaves):
-            root_node.construct(data)
-
-        def query(point, num_neighbors):
-            neighbors_heap = empty_heap_of_size(num_neighbors)
-            root_node.query(point, neighbors_heap)
-
-This certainly is not a complete description, but should give the basic idea
-of the form of the algorithm.  The implementation below is much faster than
-anything mirroring the pseudo-code above, but for that reason is much more
-opaque.  Here's the basic idea:
-
 BallTree Storage
 ~~~~~~~~~~~~~~~~
 The BallTree information is stored using a combination of
