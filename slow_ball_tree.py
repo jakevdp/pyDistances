@@ -6,17 +6,20 @@ This is a pure python ball tree.  It is slow, but should give correct
 results, and is much more readable than the cython version of the
 ball tree code.
 
-For consistency, it uses the distance metric framework to enable
-use of arbitrary distance metrics.
+For consistency, it uses the same DistanceMetric object as the cython
+BallTree in order to enable the use of arbitrary distance metrics.
 """
 import numpy as np
 from distmetrics import DistanceMetric
-from ball_tree import BallTree
 
 class SlowBallTree:
     def __init__(self, X, leaf_size=20, metric='euclidean', **kwargs):
         self.X = np.asarray(X)
         self.leaf_size = leaf_size
+        self.metric = metric
+        self.kwargs = kwargs
+        
+        # create the distance metric
         self.dm = DistanceMetric(metric, **kwargs)
 
         # build the tree
@@ -42,12 +45,29 @@ class SlowBallTree:
 
         neighbors = np.zeros((N, k), dtype=int)
         distances = np.empty((N, k), dtype=float)
-        distances.fill(np.inf)
 
         for i in range(N):
-            self.head_node.query(X[i], neighbors[i], distances[i])
+            distances[i], neighbors[i] = self.head_node.query(X[i], k, [], [])
 
         return distances, neighbors
+
+    def query_dual(self, X, k):
+        bt = X
+        if not isinstance(X, SlowBallTree):
+            if X is self.X:
+                bt = self
+            else:
+                bt = SlowBallTree(X, leaf_size=self.leaf_size,
+                                  metric=self.metric, **self.kwargs)
+
+        neighbors = np.zeros((X.shape[0], k), dtype=int)
+        distances = np.zeros((X.shape[0], k), dtype=float)
+        distances.fill(np.inf)
+
+        self.head_node.query_dual(bt.head_node, distances, neighbors)
+
+        return distances, neighbors
+
 
 class Node:
     def __init__(self, X, indices, leaf_size, dm):
@@ -85,20 +105,20 @@ class Node:
             self.children = tuple()
 
 
-    def query(self, pt, neighbors, distances):
+    def query(self, pt, k, distances, neighbors):
         """
-        Query the node
+        Query the node.
+        pt is the query point, neighbors and distances are the current
+        set of closest neighbors and distances for the point
         """
-        k = len(neighbors)
-        
         d = self.dm.dist(pt, self.centroid)
 
         min_dist = max(0, d - self.radius)
-        max_dist = d + self.radius
+        #max_dist = d + self.radius
 
-        if min_dist > distances[-1]:
+        if (len(distances) == k) and (min_dist > distances[-1]):
             # node is too far away: trim it
-            return
+            pass
         elif self.is_leaf:
             # leaf node: compute distances and add to queue
             Xind = self.X[self.indices]
@@ -109,35 +129,94 @@ class Node:
 
             i_sort = np.argsort(d)
 
-            distances[:] = d[i_sort[:k]]
-            neighbors[:] = n[i_sort[:k]]
+            distances = d[i_sort[:k]]
+            neighbors = n[i_sort[:k]]
         else:
-            self.children[0].query(pt, neighbors, distances)
-            self.children[1].query(pt, neighbors, distances)
+            distances, neighbors = self.children[0].query(pt, k,
+                                                          distances, neighbors)
+            distances, neighbors = self.children[1].query(pt, k,
+                                                          distances, neighbors)
+
+        return distances, neighbors
+
+    def query_dual(self, node, distances, neighbors):
+        """
+        Dual-tree query for k nearest neighbors
+
+        node is the other node to query, and [distances, neighbors] are
+        of shape (node.X.shape[0], k)
+        """
+        k = distances.shape[1]
+        max_observed = np.max(distances[node.indices, -1])
+
+        d = self.dm.dist(node.centroid, self.centroid)
+
+        min_dist = max(0, d - node.radius - self.radius)
+        #max_dist = d + node.radius + self.radius
+
+        if max_observed < min_dist:
+            # trim both nodes
+            pass
+
+        elif self.is_leaf and node.is_leaf:
+            X1ind = node.X[node.indices]
+            X2ind = self.X[self.indices]
+
+            dist = self.dm.cdist(X1ind, X2ind)
+            nbrs = np.zeros((dist.shape[0], 1), dtype=int) + self.indices
+
+            distances_node = np.hstack([distances[node.indices], dist])
+            neighbors_node = np.hstack([neighbors[node.indices], nbrs])
+
+            i_sort = np.argsort(distances_node, 1)[:, :k]
+            rng = np.arange(distances_node.shape[0])[:, np.newaxis]
+
+            distances[node.indices] = distances_node[rng, i_sort]
+            neighbors[node.indices] = neighbors_node[rng, i_sort]
+
+        elif self.is_leaf:
+            self.query_dual(node.children[0], distances, neighbors)
+            self.query_dual(node.children[1], distances, neighbors)
+        elif node.is_leaf:
+            self.children[0].query_dual(node, distances, neighbors)
+            self.children[1].query_dual(node, distances, neighbors)
+        else:
+            self.children[0].query_dual(node.children[0], distances, neighbors)
+            self.children[1].query_dual(node.children[0], distances, neighbors)
+            self.children[0].query_dual(node.children[1], distances, neighbors)
+            self.children[1].query_dual(node.children[1], distances, neighbors)
 
 
 if __name__ == '__main__':
+    from ball_tree import BallTree
     from time import time
     
     rseed = np.random.randint(100000)
     print "rseed = %i" % rseed
     np.random.seed(rseed)
-    X = np.random.random((1000, 3))
-    y = np.random.random((10, 3))
+    X = np.random.random((200, 3))
+    Y = np.random.random((100, 3))
 
     t0 = time()
-    SBT = SlowBallTree(X, leaf_size=2)
-    d1, n1 = SBT.query(y, 3)
+    SBT = SlowBallTree(X, leaf_size=10)
+    d1, n1 = SBT.query(Y, 3)
     t1 = time()
 
     print "python: %.2g sec" % (t1 - t0)
 
     t0 = time()
-    BT = BallTree(X, leaf_size=2)
-    d2, n2 = BT.query(y, 3)
+    SBT = SlowBallTree(X, leaf_size=10)
+    d1a, n1a = SBT.query_dual(Y, 3)
+    t1 = time()
+
+    print "python dual: %.2g sec" % (t1 - t0)
+
+    t0 = time()
+    BT = BallTree(X, leaf_size=10)
+    d2, n2 = BT.query(Y, 3)
     t1 = time()
 
     print "cython: %.2g sec" % (t1 - t0)
 
-    print "neighbors match:", np.allclose(n1, n2)
-    print "distances match:", np.allclose(d1, d2)
+    print "neighbors match:", np.allclose(n1, n2), np.allclose(n1a, n1)
+    print "distances match:", np.allclose(d1, d2), np.allclose(d1a, d1)
