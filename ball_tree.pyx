@@ -507,9 +507,15 @@ cdef class BallTree(object):
 
         distances[:] = np.inf
 
+        cdef DTYPE_t* pt
         cdef DTYPE_t* dist_ptr = <DTYPE_t*> distances.data
         cdef ITYPE_t* idx_ptr = <ITYPE_t*> idx_array.data
 
+        cdef DTYPE_t reduced_dist_LB
+        cdef NodeInfo* node_info = <NodeInfo*> self.node_info_arr.data
+        cdef DTYPE_t* node_centroid = <DTYPE_t*>self.node_centroid_arr.data
+        cdef ITYPE_t n_features = self.data.shape[1]
+        
         # create heap/queue object for holding results
         cdef HeapBase hq
         if n_neighbors >= 5:
@@ -519,19 +525,29 @@ cdef class BallTree(object):
         hq.init(dist_ptr, idx_ptr, n_neighbors)
 
         # create node stack for keeping track of recursion
-        cdef stack node_stack
-        stack_create(&node_stack, self.n_levels + 1)
+        #cdef stack node_stack
+        #stack_create(&node_stack, self.n_levels + 1)
 
         # TODO: this loop could be sped up with some cdefs to avoid
         # creating all the Xi sub-arrays
         for i, Xi in enumerate(X):
-            self.query_one_(<DTYPE_t*>Xi.data, n_neighbors,
-                             dist_ptr, idx_ptr, &node_stack, hq)
+            pt = <DTYPE_t*>Xi.data
+            reduced_dist_LB = self.calc_reduced_dist_LB(pt, node_centroid,
+                                                        node_info.radius,
+                                                        n_features)
+            self.query_one_(0, pt, n_neighbors,
+                            dist_ptr, idx_ptr, reduced_dist_LB, hq)
+
+            for i from 0 <= i < k:
+                dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
+                                                      &self.dm.params)
+
+            # if max-heap is used, results must be sorted
+            if hq.needs_final_sort():
+                sort_dist_idx(dist_ptr, idx_ptr, n_neighbors)
 
             dist_ptr += n_neighbors
             idx_ptr += n_neighbors
-
-        stack_destroy(&node_stack)
 
         # deflatten results
         if return_distance:
@@ -829,121 +845,71 @@ cdef class BallTree(object):
                                       n_points)
 
     cdef void query_one_(BallTree self,
+                         ITYPE_t i_node,
                          DTYPE_t* pt,
                          ITYPE_t k,
                          DTYPE_t* near_set_dist,
                          ITYPE_t* near_set_indx,
-                         stack* node_stack,
+                         DTYPE_t reduced_dist_LB,
                          HeapBase hq):
         cdef DTYPE_t* data = <DTYPE_t*> self.data.data
         cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
         cdef DTYPE_t* node_centroid_arr = <DTYPE_t*>self.node_centroid_arr.data
         cdef NodeInfo* node_info_arr = <NodeInfo*> self.node_info_arr.data
-        cdef NodeInfo* node_info = node_info_arr
 
         cdef ITYPE_t n_features = self.data.shape[1]
 
-        cdef DTYPE_t dmax, dist_pt, 
-        cdef DTYPE_t reduced_dist_LB, reduced_dist_LB_1, reduced_dist_LB_2
-        cdef ITYPE_t i, i1, i2, i_node
+        cdef DTYPE_t dist_pt, reduced_dist_LB_1, reduced_dist_LB_2
+        cdef ITYPE_t i, i1, i2
 
-        cdef stack_item item
+        # get the node info for this node
+        cdef NodeInfo* node_info = node_info_arr + i_node
 
-        # This will keep track of any indices with distances values.  If at
-        # the end of the tree traversal, this index is in the last position,
-        # then the warning flag will be set.
-        cdef ITYPE_t check_index = -1
-
+        # set the values in the heap
         hq.val = near_set_dist
         hq.idx = near_set_indx
 
-        item.i_node = 0
-        item.reduced_dist_LB = self.calc_reduced_dist_LB(pt, node_centroid_arr,
-                                                         node_info.radius,
-                                                         n_features)
-        stack_push(node_stack, item)
+        #------------------------------------------------------------
+        # Case 1: query point is outside node radius trim the query
+        if reduced_dist_LB > hq.largest():
+            pass
 
-        while(node_stack.n > 0):
-            item = stack_pop(node_stack)
-            i_node = item.i_node
-            reduced_dist_LB = item.reduced_dist_LB
+        #------------------------------------------------------------
+        # Case 2: this is a leaf node.  Update set of nearby points
+        elif node_info.is_leaf:
+            for i from node_info.idx_start <= i < node_info.idx_end:
+                dist_pt = self.dm.reduced_dfunc(
+                    pt, data + n_features * idx_array[i], n_features,
+                    &self.dm.params, -1, -1)
 
-            node_info = node_info_arr + i_node
+                if dist_pt < hq.largest():
+                    hq.insert(dist_pt, idx_array[i])
 
-            #------------------------------------------------------------
-            # Case 0: query point is exactly on the boundary.  Set
-            #         warning flag
-            if reduced_dist_LB == hq.largest():
-                # store index of point with same distance:
-                # we'll check it later
-                check_index = hq.idx_largest()
-                continue
+        #------------------------------------------------------------
+        # Case 3: Node is not a leaf.  Recursively query subnodes
+        #         starting with the one whose centroid is closest
+        else:
+            i1 = 2 * i_node + 1
+            i2 = i1 + 1
+            reduced_dist_LB_1 = self.calc_reduced_dist_LB(
+                pt, (node_centroid_arr + i1 * n_features),
+                node_info_arr[i1].radius, n_features)
+            reduced_dist_LB_2 = self.calc_reduced_dist_LB(
+                pt, (node_centroid_arr + i2 * n_features),
+                node_info_arr[i2].radius, n_features)
 
-            #------------------------------------------------------------
-            # Case 1: query point is outside node radius
-            elif reduced_dist_LB > hq.largest():
-                continue
-
-            #------------------------------------------------------------
-            # Case 2: this is a leaf node.  Update set of nearby points
-            elif node_info.is_leaf:
-                for i from node_info.idx_start <= i < node_info.idx_end:
-                    dist_pt = self.dm.reduced_dfunc(
-                        pt, data + n_features * idx_array[i], n_features,
-                        &self.dm.params, -1, -1)
-
-                    dmax = hq.largest()
-
-                    if dist_pt == dmax:
-                        check_index = hq.idx_largest()
-
-                    elif dist_pt < dmax:
-                        hq.insert(dist_pt, idx_array[i])
-                        if dmax == hq.largest():
-                            check_index = hq.idx_largest()
-
-            #------------------------------------------------------------
-            # Case 3: Node is not a leaf.  Recursively query subnodes
-            #         starting with the one whose centroid is closest
+            # recursively call query_one
+            if reduced_dist_LB_1 <= reduced_dist_LB_2:
+                self.query_one_(i1, pt, k, near_set_dist, near_set_indx,
+                                reduced_dist_LB_1, hq)
+                self.query_one_(i2, pt, k, near_set_dist, near_set_indx,
+                                reduced_dist_LB_2, hq)
             else:
-                i1 = 2 * i_node + 1
-                i2 = i1 + 1
-                reduced_dist_LB_1 = self.calc_reduced_dist_LB(
-                    pt, (node_centroid_arr + i1 * n_features),
-                    node_info_arr[i1].radius, n_features)
-                reduced_dist_LB_2 = self.calc_reduced_dist_LB(
-                    pt, (node_centroid_arr + i2 * n_features),
-                    node_info_arr[i2].radius, n_features)
+                self.query_one_(i2, pt, k, near_set_dist, near_set_indx,
+                                reduced_dist_LB_2, hq)
+                self.query_one_(i1, pt, k, near_set_dist, near_set_indx,
+                                reduced_dist_LB_1, hq)
 
-                # append children to stack: last-in-first-out
-                if reduced_dist_LB_2 <= reduced_dist_LB_1:
-                    item.i_node = i1
-                    item.reduced_dist_LB = reduced_dist_LB_1
-                    stack_push(node_stack, item)
-
-                    item.i_node = i2
-                    item.reduced_dist_LB = reduced_dist_LB_2
-                    stack_push(node_stack, item)
-
-                else:
-                    item.i_node = i2
-                    item.reduced_dist_LB = reduced_dist_LB_2
-                    stack_push(node_stack, item)
-
-                    item.i_node = i1
-                    item.reduced_dist_LB = reduced_dist_LB_1
-                    stack_push(node_stack, item)
-
-        if check_index == hq.idx_largest():
-            self.warning_flag = True
-
-        for i from 0 <= i < k:
-            near_set_dist[i] = self.dm.reduced_to_dist(near_set_dist[i],
-                                                       &self.dm.params)
-
-        # if max-heap is used, results must be sorted
-        if hq.needs_final_sort():
-            sort_dist_idx(hq.val, hq.idx, hq.size)
 
     cdef ITYPE_t query_radius_count_(BallTree self,
                                      DTYPE_t* pt, DTYPE_t r,
