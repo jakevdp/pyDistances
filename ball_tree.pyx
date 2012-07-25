@@ -360,7 +360,7 @@ cdef class BallTree(object):
         self.n_nodes = state[6]
         self.dm = state[7]
 
-    def query(self, X, k=1, return_distance=True):
+    def query(self, X, k=1, return_distance=True, dualtree=False):
         """
         query(X, k=1, return_distance=True)
 
@@ -403,38 +403,39 @@ cdef class BallTree(object):
             # >>> print dist  # distances to 3 closest neighbors
             # [ 0.          0.19662693  0.29473397]
         """
+        cdef ITYPE_t n_neighbors = k
+        cdef ITYPE_t n_features = self.data.shape[1]
         X = array2d(X, dtype=DTYPE, order='C')
 
-        if X.shape[-1] != self.data.shape[1]:
+        if X.shape[-1] != n_features:
             raise ValueError("query data dimension must match BallTree "
                              "data dimension")
 
-        if k > self.data.shape[0]:
+        if self.data.shape[0] < n_neighbors:
             raise ValueError("k must be less than or equal "
                              "to the number of training points")
 
-        # flatten X for iteration
+        # flatten X, and save original shape information
         orig_shape = X.shape
-        X = X.reshape((-1, X.shape[-1]))
+        X = X.reshape((-1, n_features))
 
-        cdef ITYPE_t i
-        cdef ITYPE_t n_neighbors = k
+        cdef ITYPE_t n_queries = X.shape[0]
+
+        # allocate distances and indices for return
         cdef np.ndarray distances = np.empty((X.shape[0], n_neighbors),
                                              dtype=DTYPE)
-        cdef np.ndarray idx_array = np.empty((X.shape[0], n_neighbors),
-                                             dtype=ITYPE)
-        cdef np.ndarray Xi
-
         distances.fill(np.inf)
 
+        cdef np.ndarray idx_array = np.zeros((X.shape[0], n_neighbors),
+                                             dtype=ITYPE)
+
+        # define some variables needed for the computation
+        cdef np.ndarray Xi, bounds
+        cdef ITYPE_t i
         cdef DTYPE_t* pt
         cdef DTYPE_t* dist_ptr = <DTYPE_t*> distances.data
         cdef ITYPE_t* idx_ptr = <ITYPE_t*> idx_array.data
-
         cdef DTYPE_t reduced_dist_LB
-        cdef NodeInfo* node_info = <NodeInfo*> self.node_info_arr.data
-        cdef DTYPE_t* node_centroid = <DTYPE_t*> self.node_centroid_arr.data
-        cdef ITYPE_t n_features = self.data.shape[1]
         
         # create heap/queue object for holding results
         cdef HeapBase heap
@@ -446,24 +447,55 @@ cdef class BallTree(object):
             heap = PriorityQueue()
         heap.init(dist_ptr, idx_ptr, n_neighbors)
 
-        # TODO: this loop could be sped up with some cdefs to avoid
-        # creating all the Xi sub-arrays
-        for i, Xi in enumerate(X):
-            pt = <DTYPE_t*>Xi.data
-            reduced_dist_LB = self.reduced_dist_LB_pt(0, pt)
-            self.query_one_(0, pt, n_neighbors,
-                            dist_ptr, idx_ptr, reduced_dist_LB, heap)
+        if dualtree:
+            # build a tree on query data with the same metric as self
+            other = BallTree(X, leaf_size=self.leaf_size,
+                             metric=self.dm.metric, **self.dm.init_kwargs)
+            if other.dm.learn_params_from_data:
+                other.dm.set_params_from_data(self.data)
 
-            for i from 0 <= i < k:
-                dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
-                                                      &self.dm.params)
+            reduced_dist_LB = self.reduced_dist_LB_dual(0, other, 0)
 
-            # if max-heap is used, results must be sorted
-            if heap.needs_final_sort():
+            # bounds store the current furthest neighbor which is stored
+            # in each node of the "other" tree.  This makes it so that we
+            # don't need to repeatedly search every point in the node.
+            bounds = np.empty(other.data.shape[0])
+            bounds.fill(np.inf)
+
+            self.query_dual_(0, other, 0, n_neighbors,
+                             dist_ptr, idx_ptr, reduced_dist_LB,
+                             <DTYPE_t*> bounds.data, heap)
+
+        else:
+            # TODO: this loop could be sped up with some cdefs to avoid
+            # creating all the Xi sub-arrays
+            for i, Xi in enumerate(X):
+                pt = <DTYPE_t*>Xi.data
+                reduced_dist_LB = self.reduced_dist_LB(0, pt)
+                self.query_one_(0, pt, n_neighbors,
+                                dist_ptr, idx_ptr, reduced_dist_LB, heap)
+
+                #for i from 0 <= i < n_neighbors:
+                #    dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
+                #                                          &self.dm.params)
+
+                # if max-heap is used, results must be sorted
+                #if heap.needs_final_sort():
+                #    sort_dist_idx(dist_ptr, idx_ptr, n_neighbors)
+
+                dist_ptr += n_neighbors
+                idx_ptr += n_neighbors
+
+        dist_ptr = <DTYPE_t*> distances.data
+        idx_ptr = <ITYPE_t*> idx_array.data
+        for i from 0 <= i < n_neighbors * n_queries:
+            dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
+                                                  &self.dm.params)
+        if heap.needs_final_sort():
+            for i from 0 <= i < n_queries:
                 sort_dist_idx(dist_ptr, idx_ptr, n_neighbors)
-
-            dist_ptr += n_neighbors
-            idx_ptr += n_neighbors
+                dist_ptr += n_neighbors
+                idx_ptr += n_neighbors
 
         # deflatten results
         if return_distance:
@@ -751,14 +783,13 @@ cdef class BallTree(object):
     cdef void query_one_(BallTree self,
                          ITYPE_t i_node,
                          DTYPE_t* pt,
-                         ITYPE_t k,
+                         ITYPE_t n_neighbors,
                          DTYPE_t* near_set_dist,
                          ITYPE_t* near_set_indx,
                          DTYPE_t reduced_dist_LB,
                          HeapBase heap):
         cdef DTYPE_t* data = <DTYPE_t*> self.data.data
         cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
-        cdef DTYPE_t* node_centroid_arr = <DTYPE_t*>self.node_centroid_arr.data
         cdef NodeInfo* node_info_arr = <NodeInfo*> self.node_info_arr.data
 
         cdef ITYPE_t n_features = self.data.shape[1]
@@ -795,29 +826,167 @@ cdef class BallTree(object):
         else:
             i1 = 2 * i_node + 1
             i2 = i1 + 1
-            reduced_dist_LB_1 = self.reduced_dist_LB_pt(i1, pt)
-            reduced_dist_LB_2 = self.reduced_dist_LB_pt(i2, pt)
+            reduced_dist_LB_1 = self.reduced_dist_LB(i1, pt)
+            reduced_dist_LB_2 = self.reduced_dist_LB(i2, pt)
 
             # recursively call query_one
             if reduced_dist_LB_1 <= reduced_dist_LB_2:
-                self.query_one_(i1, pt, k, near_set_dist, near_set_indx,
-                                reduced_dist_LB_1, heap)
-                self.query_one_(i2, pt, k, near_set_dist, near_set_indx,
-                                reduced_dist_LB_2, heap)
+                self.query_one_(i1, pt, n_neighbors, near_set_dist,
+                                near_set_indx, reduced_dist_LB_1, heap)
+                self.query_one_(i2, pt, n_neighbors, near_set_dist,
+                                near_set_indx, reduced_dist_LB_2, heap)
             else:
-                self.query_one_(i2, pt, k, near_set_dist, near_set_indx,
-                                reduced_dist_LB_2, heap)
-                self.query_one_(i1, pt, k, near_set_dist, near_set_indx,
-                                reduced_dist_LB_1, heap)
+                self.query_one_(i2, pt, n_neighbors, near_set_dist,
+                                near_set_indx, reduced_dist_LB_2, heap)
+                self.query_one_(i1, pt, n_neighbors, near_set_dist,
+                                near_set_indx, reduced_dist_LB_1, heap)
 
-    #cdef void query_dual_(BallTree self,
-    #                      ITYPE_t i_node,
-    #                      BallTree other,
-    #                      ITYPE_t j_node,
-    #                      ITYPE_t k
-    #                      DTYPE_t* near_set_dist,
-    #                      ITYPE_t* near_set_indx):
-    #    pass
+    cdef void query_dual_(BallTree self,
+                          ITYPE_t i_node1,
+                          BallTree other,
+                          ITYPE_t i_node2,
+                          ITYPE_t n_neighbors,
+                          DTYPE_t* near_set_dist,
+                          ITYPE_t* near_set_indx,
+                          DTYPE_t reduced_dist_LB,
+                          DTYPE_t* bounds,
+                          HeapBase heap):
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef NodeInfo* node_info1 = (<NodeInfo*> self.node_info_arr.data
+                                     + i_node1)
+        cdef NodeInfo* node_info2 = (<NodeInfo*> other.node_info_arr.data
+                                     + i_node2)
+        
+        cdef DTYPE_t* data1 = <DTYPE_t*> self.data.data
+        cdef DTYPE_t* data2 = <DTYPE_t*> other.data.data
+
+        cdef ITYPE_t* idx_array1 = <ITYPE_t*> self.idx_array.data
+        cdef ITYPE_t* idx_array2 = <ITYPE_t*> other.idx_array.data
+
+        cdef DTYPE_t dist_pt, reduced_dist_LB1, reduced_dist_LB2
+        cdef ITYPE_t i1, i2
+
+        if bounds[i_node2] < reduced_dist_LB:
+            # trim both nodes
+            pass
+        elif node_info1.is_leaf and node_info2.is_leaf:
+            # both are leaves: compare all points
+            # and update set of nearest neighbors
+            bounds[i_node2] = -1
+
+            for i2 from node_info2.idx_start <= i2 < node_info2.idx_end:
+                heap.init(near_set_dist + idx_array2[i2] * n_neighbors,
+                          near_set_indx + idx_array2[i2] * n_neighbors,
+                          n_neighbors)
+                if heap.largest() <= reduced_dist_LB:
+                    continue
+
+                for i1 from node_info1.idx_start <= i1 < node_info1.idx_end:
+                    dist_pt = self.dm.reduced_dfunc(
+                                          data1 + n_features * idx_array1[i1],
+                                          data2 + n_features * idx_array2[i2],
+                                          n_features, &self.dm.params, -1, -1)
+                    if dist_pt < heap.largest():
+                        heap.insert(dist_pt, idx_array1[i1])
+                
+                # keep track of node bound
+                if bounds[i_node2] < heap.largest():
+                    bounds[i_node2] = heap.largest()
+            
+        elif node_info1.is_leaf:
+            # split node 2 and query recursively, nearest first
+            reduced_dist_LB1 = self.reduced_dist_LB_dual(i_node1, other,
+                                                         2 * i_node2 + 1)
+            reduced_dist_LB2 = self.reduced_dist_LB_dual(i_node1, other,
+                                                         2 * i_node2 + 2)
+
+            if reduced_dist_LB1 < reduced_dist_LB2:
+                self.query_dual_(i_node1, other, 2 * i_node2 + 1, n_neighbors,
+                                 near_set_dist, near_set_indx,
+                                 reduced_dist_LB1, bounds, heap)
+                self.query_dual_(i_node1, other, 2 * i_node2 + 2, n_neighbors,
+                                 near_set_dist, near_set_indx,
+                                 reduced_dist_LB2, bounds, heap)
+            else:
+                self.query_dual_(i_node1, other, 2 * i_node2 + 2, n_neighbors,
+                                 near_set_dist, near_set_indx,
+                                 reduced_dist_LB2, bounds, heap)
+                self.query_dual_(i_node1, other, 2 * i_node2 + 1, n_neighbors,
+                                 near_set_dist, near_set_indx,
+                                 reduced_dist_LB1, bounds, heap)
+            
+            # update node bound information
+            bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
+                                   bounds[2 * i_node2 + 2])
+            
+        elif node_info2.is_leaf:
+            # split node 1 and query recursively, nearest first
+            reduced_dist_LB1 = self.reduced_dist_LB_dual(2 * i_node1 + 1,
+                                                         other, i_node2)
+            reduced_dist_LB2 = self.reduced_dist_LB_dual(2 * i_node1 + 2,
+                                                         other, i_node2)
+            if reduced_dist_LB1 < reduced_dist_LB2:
+                self.query_dual_(2 * i_node1 + 1, other, i_node2, n_neighbors,
+                                 near_set_dist, near_set_indx,
+                                 reduced_dist_LB1, bounds, heap)
+                self.query_dual_(2 * i_node1 + 2, other, i_node2, n_neighbors,
+                                 near_set_dist, near_set_indx,
+                                 reduced_dist_LB2, bounds, heap)
+            else:
+                self.query_dual_(2 * i_node1 + 2, other, i_node2, n_neighbors,
+                                 near_set_dist, near_set_indx,
+                                 reduced_dist_LB2, bounds, heap)
+                self.query_dual_(2 * i_node1 + 1, other, i_node2, n_neighbors,
+                                 near_set_dist, near_set_indx,
+                                 reduced_dist_LB1, bounds, heap)
+                
+        else:
+            # split both nodes and query recursively
+            reduced_dist_LB1 = self.reduced_dist_LB_dual(2 * i_node1 + 1,
+                                                         other,
+                                                         2 * i_node2 + 1)
+            reduced_dist_LB2 = self.reduced_dist_LB_dual(2 * i_node1 + 2,
+                                                         other,
+                                                         2 * i_node2 + 1)
+            if reduced_dist_LB1 < reduced_dist_LB2:
+                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 1,
+                                 n_neighbors, near_set_dist, near_set_indx,
+                                 reduced_dist_LB1, bounds, heap)
+                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 1,
+                                 n_neighbors, near_set_dist, near_set_indx,
+                                 reduced_dist_LB2, bounds, heap)
+            else:
+                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 1,
+                                 n_neighbors, near_set_dist, near_set_indx,
+                                 reduced_dist_LB2, bounds, heap)
+                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 1,
+                                 n_neighbors, near_set_dist, near_set_indx,
+                                 reduced_dist_LB1, bounds, heap)
+
+            reduced_dist_LB1 = self.reduced_dist_LB_dual(2 * i_node1 + 1,
+                                                         other,
+                                                         2 * i_node2 + 2)
+            reduced_dist_LB2 = self.reduced_dist_LB_dual(2 * i_node1 + 2,
+                                                         other,
+                                                         2 * i_node2 + 2)
+            if reduced_dist_LB1 < reduced_dist_LB2:
+                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 2,
+                                 n_neighbors, near_set_dist, near_set_indx,
+                                 reduced_dist_LB1, bounds, heap)
+                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 2,
+                                 n_neighbors, near_set_dist, near_set_indx,
+                                 reduced_dist_LB2, bounds, heap)
+            else:
+                self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 2,
+                                 n_neighbors, near_set_dist, near_set_indx,
+                                 reduced_dist_LB2, bounds, heap)
+                self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 2,
+                                 n_neighbors, near_set_dist, near_set_indx,
+                                 reduced_dist_LB1, bounds, heap)
+            
+            # update node bound information
+            bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
+                                   bounds[2 * i_node2 + 2])
 
     cdef ITYPE_t query_radius_one_(BallTree self,
                                    ITYPE_t i_node,
@@ -900,10 +1069,10 @@ cdef class BallTree(object):
         return idx_i
 
     ########################################################################
-    # calc_dist_LB
-    # calc_reduced_dist_LB
+    # lower-bound distance
     #  These calculates the lower-bound distances between a point and a node
-    cdef DTYPE_t dist_LB_pt(BallTree self, ITYPE_t i_node, DTYPE_t* pt):
+    #  or a node and a node.
+    cdef DTYPE_t dist_LB(BallTree self, ITYPE_t i_node, DTYPE_t* pt):
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef NodeInfo* info = <NodeInfo*> self.node_info_arr.data
         cdef DTYPE_t* centroid = <DTYPE_t*> self.node_centroid_arr.data
@@ -912,10 +1081,28 @@ cdef class BallTree(object):
                                       n_features, &self.dm.params, -1, -1)
                         - info[i_node].radius))
 
-    cdef DTYPE_t reduced_dist_LB_pt(BallTree self, ITYPE_t i_node, DTYPE_t* pt):
-        return self.dm.dist_to_reduced(self.dist_LB_pt(i_node, pt),
+    cdef DTYPE_t reduced_dist_LB(BallTree self, ITYPE_t i_node, DTYPE_t* pt):
+        return self.dm.dist_to_reduced(self.dist_LB(i_node, pt),
                                        &self.dm.params)
 
+    cdef DTYPE_t dist_LB_dual(BallTree self, ITYPE_t i_node1,
+                              BallTree other, ITYPE_t i_node2):
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef NodeInfo* info1 = <NodeInfo*> self.node_info_arr.data
+        cdef NodeInfo* info2 = <NodeInfo*> other.node_info_arr.data
+        cdef DTYPE_t* centroid1 = <DTYPE_t*> self.node_centroid_arr.data
+        cdef DTYPE_t* centroid2 = <DTYPE_t*> other.node_centroid_arr.data
+        
+        return fmax(0, (self.dm.dfunc(centroid2 + i_node2 * n_features,
+                                      centroid1 + i_node1 * n_features,
+                                      n_features, &self.dm.params, -1, -1)
+                        - info1[i_node1].radius - info2[i_node2].radius))
+
+    cdef DTYPE_t reduced_dist_LB_dual(BallTree self, ITYPE_t i_node1,
+                                      BallTree other, ITYPE_t i_node2):
+        return self.dm.dist_to_reduced(self.dist_LB_dual(i_node1,
+                                                         other, i_node2),
+                                       &self.dm.params)
 
 ######################################################################
 # Helper functions for building and querying
@@ -1076,13 +1263,13 @@ cdef class HeapBase:
     cdef ITYPE_t* idx
     cdef ITYPE_t size
 
-    cdef int needs_final_sort(self):
-        return 0
-
     cdef void init(self, DTYPE_t* val, ITYPE_t* idx, ITYPE_t size):
         self.val = val
         self.idx = idx
         self.size = size
+
+    cdef int needs_final_sort(self):
+        return 0
 
     cdef DTYPE_t largest(self):
         return 0.0

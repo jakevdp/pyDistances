@@ -77,6 +77,7 @@ def newObj(obj):
 # DistanceMetric class
 
 cdef class DistanceMetric(object):
+    # Note: Attribute declarations are in distmetrics.pxd
     def __cinit__(self):
         """Initialize all arrays to empty"""
         self.mahalanobis_VI = self.seuclidean_V = self.minkowski_w =\

@@ -57,8 +57,8 @@ class TestBallTree:
                              'sokalsneath': {}
                              }
 
-    def _check_query_knn(self, bt, kdt, k):
-        dist_bt, ind_bt = bt.query(self.X, k=k)
+    def _check_query_knn(self, bt, kdt, k, dualtree=False):
+        dist_bt, ind_bt = bt.query(self.X, k=k, dualtree=dualtree)
         dist_kd, ind_kd = kdt.query(self.X, k=k)
 
         if k == 1:
@@ -71,8 +71,9 @@ class TestBallTree:
     def test_query_knn(self):
         bt = BallTree(self.X)
         kdt = cKDTree(self.X)
-        for k in (1, 2, 4, 8):
-            yield (self._check_query_knn, bt, kdt, k)
+        for k in (1, 2, 4, 8, 16):
+            for dualtree in [True, False]:
+                yield (self._check_query_knn, bt, kdt, k, dualtree)
 
     def _check_metrics_float(self, k, metric, kwargs):
         bt = BallTree(self.X, metric=metric, **kwargs)
