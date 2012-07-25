@@ -450,9 +450,7 @@ cdef class BallTree(object):
         # creating all the Xi sub-arrays
         for i, Xi in enumerate(X):
             pt = <DTYPE_t*>Xi.data
-            reduced_dist_LB = self.calc_reduced_dist_LB(pt, node_centroid,
-                                                        node_info.radius,
-                                                        n_features)
+            reduced_dist_LB = self.reduced_dist_LB_pt(0, pt)
             self.query_one_(0, pt, n_neighbors,
                             dist_ptr, idx_ptr, reduced_dist_LB, heap)
 
@@ -797,12 +795,8 @@ cdef class BallTree(object):
         else:
             i1 = 2 * i_node + 1
             i2 = i1 + 1
-            reduced_dist_LB_1 = self.calc_reduced_dist_LB(
-                pt, (node_centroid_arr + i1 * n_features),
-                node_info_arr[i1].radius, n_features)
-            reduced_dist_LB_2 = self.calc_reduced_dist_LB(
-                pt, (node_centroid_arr + i2 * n_features),
-                node_info_arr[i2].radius, n_features)
+            reduced_dist_LB_1 = self.reduced_dist_LB_pt(i1, pt)
+            reduced_dist_LB_2 = self.reduced_dist_LB_pt(i2, pt)
 
             # recursively call query_one
             if reduced_dist_LB_1 <= reduced_dist_LB_2:
@@ -815,6 +809,15 @@ cdef class BallTree(object):
                                 reduced_dist_LB_2, heap)
                 self.query_one_(i1, pt, k, near_set_dist, near_set_indx,
                                 reduced_dist_LB_1, heap)
+
+    #cdef void query_dual_(BallTree self,
+    #                      ITYPE_t i_node,
+    #                      BallTree other,
+    #                      ITYPE_t j_node,
+    #                      ITYPE_t k
+    #                      DTYPE_t* near_set_dist,
+    #                      ITYPE_t* near_set_indx):
+    #    pass
 
     cdef ITYPE_t query_radius_one_(BallTree self,
                                    ITYPE_t i_node,
@@ -900,26 +903,18 @@ cdef class BallTree(object):
     # calc_dist_LB
     # calc_reduced_dist_LB
     #  These calculates the lower-bound distances between a point and a node
-    cdef inline DTYPE_t calc_dist_LB(BallTree self,
-                                     DTYPE_t* pt,
-                                     DTYPE_t* centroid,
-                                     DTYPE_t radius,
-                                     ITYPE_t n_features):
-        return fmax(
-            0, (self.dm.dfunc(pt, centroid, n_features,
-                              &self.dm.params, -1, -1)
-                - radius))
+    cdef DTYPE_t dist_LB_pt(BallTree self, ITYPE_t i_node, DTYPE_t* pt):
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef NodeInfo* info = <NodeInfo*> self.node_info_arr.data
+        cdef DTYPE_t* centroid = <DTYPE_t*> self.node_centroid_arr.data
 
-    cdef inline DTYPE_t calc_reduced_dist_LB(BallTree self,
-                                             DTYPE_t* pt,
-                                             DTYPE_t* centroid,
-                                             DTYPE_t radius,
-                                             ITYPE_t n_features):
-        return self.dm.dist_to_reduced(
-            fmax(0, (self.dm.dfunc(pt, centroid, n_features,
-                                   &self.dm.params, -1, -1)
-                     - radius)),
-            &self.dm.params)
+        return fmax(0, (self.dm.dfunc(pt, centroid + i_node * n_features,
+                                      n_features, &self.dm.params, -1, -1)
+                        - info[i_node].radius))
+
+    cdef DTYPE_t reduced_dist_LB_pt(BallTree self, ITYPE_t i_node, DTYPE_t* pt):
+        return self.dm.dist_to_reduced(self.dist_LB_pt(i_node, pt),
+                                       &self.dm.params)
 
 
 ######################################################################
@@ -1067,7 +1062,7 @@ cdef void sort_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
 
 
 ######################################################################
-# heap implementation
+# Heap implementations
 #
 # We use an inheritance structure to allow multiple implementations with
 # the same interface.  As long as each derived class only overloads functions
