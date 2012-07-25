@@ -131,8 +131,9 @@ class TestBallTree:
         for p in (1, 2, 3, 4, np.inf):
             yield (self._check_p_distance_vs_KDT, p)
 
-    def test_query_radius_count(self, n_samples=100, n_features=10):
-        X = 2 * np.random.random(size=(n_samples, n_features)) - 1
+    def test_query_radius_count(self):
+        # center the data
+        X = 2 * self.X - 1
 
         dm = DistanceMetric()
         D = dm.pdist(X, squareform=True)
@@ -146,43 +147,51 @@ class TestBallTree:
 
         assert_array_almost_equal(count1, count2)
 
-    def test_query_radius_indices(self, n_samples=100, n_features=10):
-        X = 2 * np.random.random(size=(n_samples, n_features)) - 1
+    def test_query_radius_indices(self, n_queries=20):
+        # center the data
+        X = 2 * self.X - 1
 
         dm = DistanceMetric()
-        D = dm.cdist(X[:10], X)
-
+        D = dm.cdist(X[:n_queries], X)
         r = np.mean(D)
 
         bt = BallTree(X)
-        ind = bt.query_radius(X[:10], r, return_distance=False)
+        ind = bt.query_radius(X[:n_queries], r, return_distance=False)
+        ind2 = np.zeros(D.shape) + np.arange(D.shape[1])
 
-        for i in range(10):
-            ind1 = ind[i]
-            ind2 = np.where(D[i] <= r)[0]
+        ind = np.concatenate(map(np.sort, ind))
+        ind2 = ind2[D <= r]
+        
+        assert_array_almost_equal(ind, ind2)
 
-            ind1.sort()
-            ind2.sort()
+    def _check_query_radius_distance(self, X, bt, query_pt,
+                                     dist_true, r, eps):
+        ind, dist = bt.query_radius(query_pt, r + eps,
+                                    return_distance=True,
+                                    sort_results=True)
+        ind = ind[0]
+        dist = dist[0]
 
-            assert_array_almost_equal(ind1, ind2)
+        assert_array_almost_equal(dist, dist_true[dist_true <= r])
 
-    def test_query_radius_distance(self, n_samples=100, n_features=10):
-        X = 2 * np.random.random(size=(n_samples, n_features)) - 1
-        query_pt = np.zeros(n_features, dtype=float)
+    def test_query_radius_distance(self):
+        # center the data
+        X = 2 * self.X - 1
+
+        # choose a query point near the origin
+        query_pt = 0.01 * X[:1]
 
         eps = 1E-15  # roundoff error can cause test to fail
         bt = BallTree(X, leaf_size=5)
-        rad = np.sqrt(((X - query_pt) ** 2).sum(1))
 
-        for r in np.linspace(rad[0], rad[-1], 100):
-            ind, dist = bt.query_radius(query_pt, r + eps, return_distance=True)
+        # compute reference distances
+        dm = DistanceMetric()
+        dist_true = dm.cdist(query_pt, X)[0]
+        dist_true.sort()
 
-            ind = ind[0]
-            dist = dist[0]
-
-            d = np.sqrt(((query_pt - X[ind]) ** 2).sum(1))
-
-            assert_array_almost_equal(d, dist)
+        for r in np.linspace(dist_true[0], dist_true[-1], 10):
+            yield (self._check_query_radius_distance,
+                   X, bt, query_pt, dist_true, r, eps)
 
     def _check_pickle(self, protocol, bt1, ind1, dist1):
         s = cPickle.dumps(bt1, protocol=protocol)
