@@ -660,12 +660,20 @@ cdef class BallTree(object):
 
             #TODO: avoid enumerate and repeated allocation of pt slice
             for pt_idx, pt in enumerate(X):
-                count_i = self.query_radius_distances_(
-                    <DTYPE_t*>pt.data,
-                    r[pt_idx],
-                    <ITYPE_t*>idx_array_i.data,
-                    <DTYPE_t*>distances_i.data,
-                    &node_stack)
+                count_i = self.query_radius_one_(
+                                      0,
+                                      <DTYPE_t*>pt.data,
+                                      r[pt_idx],
+                                      <ITYPE_t*>idx_array_i.data,
+                                      <DTYPE_t*>distances_i.data,
+                                      0, False, True)
+                                                       
+                #count_i = self.query_radius_distances_(
+                #    <DTYPE_t*>pt.data,
+                #    r[pt_idx],
+                #    <ITYPE_t*>idx_array_i.data,
+                #    <DTYPE_t*>distances_i.data,
+                #    &node_stack)
                 if sort_results:
                     sort_dist_idx(<DTYPE_t*>distances_i.data,
                                   <ITYPE_t*>idx_array_i.data,
@@ -1092,7 +1100,85 @@ cdef class BallTree(object):
 
         return idx_i
 
-    
+    cdef ITYPE_t query_radius_one_(BallTree self,
+                                   ITYPE_t i_node,
+                                   DTYPE_t* pt, DTYPE_t r,
+                                   ITYPE_t* indices,
+                                   DTYPE_t* distances,
+                                   ITYPE_t idx_i,
+                                   int count_only,
+                                   int return_distances):
+        cdef DTYPE_t* data = <DTYPE_t*> self.data.data
+        cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
+        cdef DTYPE_t* node_centroid_arr = <DTYPE_t*>self.node_centroid_arr.data
+        cdef NodeInfo* node_info_arr = <NodeInfo*> self.node_info_arr.data
+
+        cdef ITYPE_t n_features = self.data.shape[1]
+        cdef NodeInfo* node_info = node_info_arr + i_node
+        cdef DTYPE_t* node_centroid = node_centroid_arr + n_features * i_node
+
+        cdef ITYPE_t i
+        cdef DTYPE_t reduced_r = self.dm.dist_to_reduced(r, &self.dm.params)
+        cdef DTYPE_t dist_pt
+
+        dist_pt = self.dm.dfunc(pt, node_centroid, n_features,
+                                &self.dm.params, -1, -1)
+
+        #------------------------------------------------------------
+        # Case 1: all node points are outside distance r.
+        #         prune this branch.
+        if dist_pt - node_info.radius > r:
+            pass
+
+        #------------------------------------------------------------
+        # Case 2: all node points are within distance r
+        #         add all points
+        elif dist_pt + node_info.radius < r:
+            if count_only:
+                idx_i += (node_info.idx_end - node_info.idx_start)
+            else:
+                for i from node_info.idx_start <= i < node_info.idx_end:
+                    if (idx_i < 0) or (idx_i >= self.data.shape[0]):
+                        raise ValueError("idx_i too big")
+                    indices[idx_i] = idx_array[i]
+                    if return_distances:
+                        dist_pt = self.dm.dfunc(
+                                        pt, data + n_features * idx_array[i],
+                                        n_features, &self.dm.params, -1, -1)
+                        distances[idx_i] = dist_pt
+                    idx_i += 1
+
+        #------------------------------------------------------------
+        # Case 3: this is a leaf node.  Go through all points to
+        #         determine if they fall within radius
+        elif node_info.is_leaf:
+            for i from node_info.idx_start <= i < node_info.idx_end:
+                dist_pt = self.dm.reduced_dfunc(
+                                         pt, data + n_features * idx_array[i],
+                                         n_features, &self.dm.params, -1, -1)
+                if dist_pt <= reduced_r:
+                    if (idx_i < 0) or (idx_i >= self.data.shape[0]):
+                        raise ValueError("Fatal: idx_i out of range")
+                    if count_only:
+                        pass
+                    else:
+                        indices[idx_i] = idx_array[i]
+                        if return_distances:
+                            distances[idx_i] = self.dm.reduced_to_dist(
+                                                      dist_pt, &self.dm.params)
+                    idx_i += 1
+
+        #------------------------------------------------------------
+        # Case 4: Node is not a leaf.  Recursively query subnodes
+        else:
+            idx_i = self.query_radius_one_(2 * i_node + 1, pt, r,
+                                           indices, distances, idx_i,
+                                           count_only, return_distances)
+            idx_i = self.query_radius_one_(2 * i_node + 2, pt, r,
+                                           indices, distances, idx_i,
+                                           count_only, return_distances)
+
+        return idx_i
 
     ########################################################################
     # calc_dist_LB
