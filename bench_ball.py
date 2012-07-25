@@ -18,7 +18,7 @@ for k in 1, 2, 4, 8:
     
 for r in 0.1, 0.3, 0.5:
     t0 = time()
-    BT.query_radius(X, k)
+    BT.query_radius(X, r)
     t1 = time()
     print "query r<%.1f in [%i, %i]: %.3g sec" % (r, X.shape[0], X.shape[1],
                                                   t1 - t0)
