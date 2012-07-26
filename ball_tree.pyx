@@ -666,7 +666,7 @@ cdef class BallTree(object):
         cdef DTYPE_t* point
 
         #------------------------------------------------------------
-        # take care of the root node
+        # initialize the root node
         node_info.idx_start = 0
         node_info.idx_end = n_samples
         n_points = n_samples
@@ -679,15 +679,13 @@ cdef class BallTree(object):
         radius = 0
         for i from node_info.idx_start <= i < node_info.idx_end:
             radius = fmax(radius,
-                          self.dm.reduced_dfunc(
-                                  centroid, data + n_features * idx_array[i],
-                                  n_features, &self.dm.params, -1, -1))
+                          self.reduced_distance(
+                                  centroid, data + n_features * idx_array[i]))
         node_info.radius = self.dm.reduced_to_dist(radius, &self.dm.params)
 
         # check if this is a leaf
         if self.n_nodes == 1:
             node_info.is_leaf = 1
-
         else:
             node_info.is_leaf = 0
 
@@ -763,9 +761,9 @@ cdef class BallTree(object):
                 radius = 0
                 for i from idx_start <= i < idx_end:
                     radius = fmax(radius,
-                                  self.dm.reduced_dfunc(
-                        centroid, data + n_features * idx_array[i],
-                        n_features, &self.dm.params, -1, -1))
+                                  self.reduced_distance(
+                        centroid, data + n_features * idx_array[i]))
+
                 node_info.radius = self.dm.reduced_to_dist(radius,
                                                            &self.dm.params)
 
@@ -815,9 +813,8 @@ cdef class BallTree(object):
         # Case 2: this is a leaf node.  Update set of nearby points
         elif node_info.is_leaf:
             for i from node_info.idx_start <= i < node_info.idx_end:
-                dist_pt = self.dm.reduced_dfunc(
-                    pt, data + n_features * idx_array[i], n_features,
-                    &self.dm.params, -1, -1)
+                dist_pt = self.reduced_distance(
+                    pt, data + n_features * idx_array[i])
 
                 if dist_pt < heap.largest():
                     heap.insert(dist_pt, idx_array[i])
@@ -831,7 +828,7 @@ cdef class BallTree(object):
             reduced_dist_LB_1 = self.reduced_dist_LB(i1, pt)
             reduced_dist_LB_2 = self.reduced_dist_LB(i2, pt)
 
-            # recursively call query_one
+            # recursively query subnodes
             if reduced_dist_LB_1 <= reduced_dist_LB_2:
                 self.query_one_(i1, pt, n_neighbors, near_set_dist,
                                 near_set_indx, reduced_dist_LB_1, heap)
@@ -868,7 +865,7 @@ cdef class BallTree(object):
         cdef DTYPE_t dist_pt, reduced_dist_LB1, reduced_dist_LB2
         cdef ITYPE_t i1, i2
 
-        if bounds[i_node2] < reduced_dist_LB:
+        if reduced_dist_LB > bounds[i_node2]:
             # trim both nodes
             pass
         elif node_info1.is_leaf and node_info2.is_leaf:
@@ -884,16 +881,14 @@ cdef class BallTree(object):
                     continue
 
                 for i1 from node_info1.idx_start <= i1 < node_info1.idx_end:
-                    dist_pt = self.dm.reduced_dfunc(
+                    dist_pt = self.reduced_distance(
                                           data1 + n_features * idx_array1[i1],
-                                          data2 + n_features * idx_array2[i2],
-                                          n_features, &self.dm.params, -1, -1)
+                                          data2 + n_features * idx_array2[i2])
                     if dist_pt < heap.largest():
                         heap.insert(dist_pt, idx_array1[i1])
                 
                 # keep track of node bound
-                if bounds[i_node2] < heap.largest():
-                    bounds[i_node2] = heap.largest()
+                bounds[i_node2] = fmax(bounds[i_node2], heap.largest())
             
         elif node_info1.is_leaf:
             # split node 2 and query recursively, nearest first
@@ -1011,8 +1006,7 @@ cdef class BallTree(object):
         cdef DTYPE_t reduced_r = self.dm.dist_to_reduced(r, &self.dm.params)
         cdef DTYPE_t dist_pt
 
-        dist_pt = self.dm.dfunc(pt, node_centroid, n_features,
-                                &self.dm.params, -1, -1)
+        dist_pt = self.distance(pt, node_centroid)
 
         #------------------------------------------------------------
         # Case 1: all node points are outside distance r.
@@ -1022,7 +1016,7 @@ cdef class BallTree(object):
 
         #------------------------------------------------------------
         # Case 2: all node points are within distance r
-        #         add all points
+        #         add all points to neighbors
         elif dist_pt + node_info.radius < r:
             if count_only:
                 idx_i += (node_info.idx_end - node_info.idx_start)
@@ -1032,9 +1026,8 @@ cdef class BallTree(object):
                         raise ValueError("idx_i too big")
                     indices[idx_i] = idx_array[i]
                     if return_distance:
-                        dist_pt = self.dm.dfunc(
-                                        pt, data + n_features * idx_array[i],
-                                        n_features, &self.dm.params, -1, -1)
+                        dist_pt = self.distance(pt, (data + n_features
+                                                     * idx_array[i]))
                         distances[idx_i] = dist_pt
                     idx_i += 1
 
@@ -1043,9 +1036,8 @@ cdef class BallTree(object):
         #         determine if they fall within radius
         elif node_info.is_leaf:
             for i from node_info.idx_start <= i < node_info.idx_end:
-                dist_pt = self.dm.reduced_dfunc(
-                                         pt, data + n_features * idx_array[i],
-                                         n_features, &self.dm.params, -1, -1)
+                dist_pt = self.reduced_distance(pt, (data + n_features
+                                                     * idx_array[i]))
                 if dist_pt <= reduced_r:
                     if (idx_i < 0) or (idx_i >= self.data.shape[0]):
                         raise ValueError("Fatal: idx_i out of range")
@@ -1079,8 +1071,7 @@ cdef class BallTree(object):
         cdef NodeInfo* info = <NodeInfo*> self.node_info_arr.data
         cdef DTYPE_t* centroid = <DTYPE_t*> self.node_centroid_arr.data
 
-        return fmax(0, (self.dm.dfunc(pt, centroid + i_node * n_features,
-                                      n_features, &self.dm.params, -1, -1)
+        return fmax(0, (self.distance(pt, centroid + i_node * n_features)
                         - info[i_node].radius))
 
     cdef DTYPE_t reduced_dist_LB(BallTree self, ITYPE_t i_node, DTYPE_t* pt):
@@ -1095,9 +1086,8 @@ cdef class BallTree(object):
         cdef DTYPE_t* centroid1 = <DTYPE_t*> self.node_centroid_arr.data
         cdef DTYPE_t* centroid2 = <DTYPE_t*> other.node_centroid_arr.data
         
-        return fmax(0, (self.dm.dfunc(centroid2 + i_node2 * n_features,
-                                      centroid1 + i_node1 * n_features,
-                                      n_features, &self.dm.params, -1, -1)
+        return fmax(0, (self.distance(centroid2 + i_node2 * n_features,
+                                      centroid1 + i_node1 * n_features)
                         - info1[i_node1].radius - info2[i_node2].radius))
 
     cdef DTYPE_t reduced_dist_LB_dual(BallTree self, ITYPE_t i_node1,
@@ -1105,6 +1095,15 @@ cdef class BallTree(object):
         return self.dm.dist_to_reduced(self.dist_LB_dual(i_node1,
                                                          other, i_node2),
                                        &self.dm.params)
+
+    cdef DTYPE_t distance(BallTree self, DTYPE_t* x1, DTYPE_t* x2):
+        return self.dm.dfunc(x1, x2, self.data.shape[1],
+                             &self.dm.params, -1, -1)
+
+    cdef DTYPE_t reduced_distance(BallTree self, DTYPE_t* x1, DTYPE_t* x2):
+        return self.dm.reduced_dfunc(x1, x2, self.data.shape[1],
+                                     &self.dm.params, -1, -1)
+    
 
 ######################################################################
 # Helper functions for building and querying
