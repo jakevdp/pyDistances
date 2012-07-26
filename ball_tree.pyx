@@ -428,9 +428,10 @@ cdef class BallTree(object):
 
         cdef np.ndarray idx_array = np.zeros((X.shape[0], n_neighbors),
                                              dtype=ITYPE)
+        cdef np.ndarray Xarr = X
 
         # define some variables needed for the computation
-        cdef np.ndarray Xi, bounds
+        cdef np.ndarray bounds
         cdef ITYPE_t i
         cdef DTYPE_t* pt
         cdef DTYPE_t* dist_ptr = <DTYPE_t*> distances.data
@@ -467,24 +468,15 @@ cdef class BallTree(object):
                              <DTYPE_t*> bounds.data, heap)
 
         else:
-            # TODO: this loop could be sped up with some cdefs to avoid
-            # creating all the Xi sub-arrays
-            for i, Xi in enumerate(X):
-                pt = <DTYPE_t*>Xi.data
+            pt = <DTYPE_t*>Xarr.data
+            for i in range(Xarr.shape[0]):
                 reduced_dist_LB = self.reduced_dist_LB(0, pt)
                 self.query_one_(0, pt, n_neighbors,
                                 dist_ptr, idx_ptr, reduced_dist_LB, heap)
 
-                #for i from 0 <= i < n_neighbors:
-                #    dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
-                #                                          &self.dm.params)
-
-                # if max-heap is used, results must be sorted
-                #if heap.needs_final_sort():
-                #    sort_dist_idx(dist_ptr, idx_ptr, n_neighbors)
-
                 dist_ptr += n_neighbors
                 idx_ptr += n_neighbors
+                pt += n_features
 
         dist_ptr = <DTYPE_t*> distances.data
         idx_ptr = <ITYPE_t*> idx_array.data
@@ -505,7 +497,7 @@ cdef class BallTree(object):
             return idx_array.reshape((orig_shape[:-1]) + (k,))
 
     def query_radius(self, X, r, return_distance=False,
-                     count_only=False, sort_results=False):
+                     int count_only=False, int sort_results=False):
         """
         query_radius(self, X, r, return_distance=False,
                      count_only = False, sort_results=False):
@@ -582,6 +574,7 @@ cdef class BallTree(object):
         cdef np.ndarray idx_array, idx_array_i, distances, distances_i
         cdef np.ndarray pt, count
         cdef ITYPE_t count_i = 0
+        cdef ITYPE_t n_features = self.data.shape[1]
 
         # prepare X for query
         X = array2d(X, dtype=DTYPE, order='C')
@@ -593,7 +586,7 @@ cdef class BallTree(object):
         r = np.asarray(r, dtype=DTYPE, order='C')
         r = np.atleast_1d(r)
         if r.shape == (1,):
-            r = r[0] * np.ones(X.shape[:-1], dtype=np.double)
+            r = r[0] * np.ones(X.shape[:-1], dtype=DTYPE)
         else:
             if r.shape != X.shape[:-1]:
                 raise ValueError("r must be broadcastable to X.shape")
@@ -603,6 +596,14 @@ cdef class BallTree(object):
         X = X.reshape((-1, X.shape[-1]))
         r = r.reshape(-1)
         
+        cdef np.ndarray Xarr = X
+        cdef np.ndarray rarr = r
+
+        cdef DTYPE_t* Xdata = <DTYPE_t*>Xarr.data
+        cdef DTYPE_t* rdata = <DTYPE_t*>rarr.data
+
+        cdef ITYPE_t i
+
         # prepare variables for iteration
         if not count_only:
             idx_array = np.empty(X.shape[0], dtype='object')
@@ -612,28 +613,29 @@ cdef class BallTree(object):
         idx_array_i = np.empty(self.data.shape[0], dtype=ITYPE)
         distances_i = np.empty(self.data.shape[0], dtype=DTYPE)
         count = np.zeros(X.shape[0], ITYPE)
+        cdef ITYPE_t* count_data = <ITYPE_t*> count.data
 
         #TODO: avoid enumerate and repeated allocation of pt slice
-        for pt_idx, pt in enumerate(X):
-            count_i = self.query_radius_one_(
-                                   0,
-                                   <DTYPE_t*>pt.data,
-                                   r[pt_idx],
-                                   <ITYPE_t*>idx_array_i.data,
-                                   <DTYPE_t*>distances_i.data,
-                                   0, count_only, return_distance)
+        for i in range(Xarr.shape[0]):
+            count_data[i] = self.query_radius_one_(
+                                               0,
+                                               Xdata + i * n_features,
+                                               rdata[i],
+                                               <ITYPE_t*>idx_array_i.data,
+                                               <DTYPE_t*>distances_i.data,
+                                               0, count_only, return_distance)
 
             if count_only:
-                count[pt_idx] = count_i
+                pass
             else:
                 if sort_results:
                     sort_dist_idx(<DTYPE_t*>distances_i.data,
                                   <ITYPE_t*>idx_array_i.data,
-                                  count_i)
+                                  count_data[i])
 
-                idx_array[pt_idx] = idx_array_i[:count_i].copy()
+                idx_array[i] = idx_array_i[:count_data[i]].copy()
                 if return_distance:
-                    distances[pt_idx] = distances_i[:count_i].copy()
+                    distances[i] = distances_i[:count_data[i]].copy()
 
         # deflatten results
         if count_only:

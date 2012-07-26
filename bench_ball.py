@@ -5,7 +5,7 @@ from ball_tree import BallTree
 X = np.random.random((10000, 3))
 
 t0 = time()
-BT = BallTree(X, 20)
+BT = BallTree(X, 30)
 t1 = time()
 print "construction: %.2g sec" % (t1 - t0)
 
