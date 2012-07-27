@@ -1,4 +1,3 @@
-
 # Author: Jake Vanderplas <vanderplas@astro.washington.edu>
 # License: BSD
 
@@ -8,9 +7,9 @@
 #  - currently all metrics are used without precomputed values.  This should
 #    be addressed.
 #
-#  - abstract-out node objects to make the code more readable.  I think it
-#    can be done, but not sure if it will lead to a speed penalty...  Create
-#    kd-tree node type as well?
+#  - make query_radius play well with bound abstraction
+#
+#  - add KDBound (and perhaps periodic boundary conditions)
 #
 #  - correlation function query
 #
@@ -275,12 +274,14 @@ cdef class BallTree(object):
     cdef np.ndarray idx_array
     cdef np.ndarray node_centroid_arr
     cdef np.ndarray node_info_arr
+
     cdef ITYPE_t leaf_size
     cdef ITYPE_t n_levels
     cdef ITYPE_t n_nodes
 
     cdef DistanceMetric dm
     cdef BoundBase bound
+    cdef HeapBase heap
 
     def __cinit__(self):
         """
@@ -291,6 +292,10 @@ cdef class BallTree(object):
         self.idx_array = np.empty(0, dtype=ITYPE)
         self.node_centroid_arr = np.empty((0,0), dtype=DTYPE)
         self.node_info_arr = np.empty(0, dtype='c')
+        
+        self.dm = DistanceMetric()
+        self.bound = BoundBase()
+        self.heap = HeapBase()
 
     def __init__(self, X, leaf_size=20, 
                  metric="minkowski", p=2, **kwargs):
@@ -310,7 +315,7 @@ cdef class BallTree(object):
         if leaf_size < 1:
             raise ValueError("leaf_size must be greater than or equal to 1")
         self.leaf_size = leaf_size
-
+        
         # set up dist_metric if needed
         self.dm = DistanceMetric(metric, p=p, **kwargs)
         if self.dm.learn_params_from_data:
@@ -319,16 +324,15 @@ cdef class BallTree(object):
         cdef ITYPE_t n_samples = self.data.shape[0]
         cdef ITYPE_t n_features = self.data.shape[1]
 
-        # determine number of levels in the ball tree, and from this
-        # the number of nodes in the ball tree
-        self.n_levels = np.log2(max(1, (n_samples - 1) / self.leaf_size)) + 1
+        # determine number of levels in the tree, and from this
+        # the number of nodes in the tree
+        self.n_levels = np.log2(fmax(1, (n_samples - 1) / self.leaf_size)) + 1
         self.n_nodes = (2 ** self.n_levels) - 1
 
+        # allocate arrays for storage
         self.idx_array = np.arange(n_samples, dtype=ITYPE)
-
         self.node_centroid_arr = np.empty((self.n_nodes, n_features),
                                           dtype=DTYPE, order='C')
-
         self.node_info_arr = np.empty(self.n_nodes * sizeof(NodeInfo),
                                       dtype='c', order='C')
         self.recursive_build(0, 0, n_samples)
@@ -358,7 +362,9 @@ cdef class BallTree(object):
         self.n_levels = state[5]
         self.n_nodes = state[6]
         self.dm = state[7]
-        self.bound = BoundBase()
+
+        self.bound = BallBound()
+        self.heap = HeapBase()
 
     def query(self, X, k=1, return_distance=True, dualtree=False):
         """
@@ -439,14 +445,13 @@ cdef class BallTree(object):
         cdef DTYPE_t reduced_dist_LB
         
         # create heap/queue object for holding results
-        cdef HeapBase heap
         if n_neighbors == 1:
-            heap = OneItemHeap()
+            self.heap = OneItemHeap()
         elif n_neighbors >= 5:
-            heap = MaxHeap()
+            self.heap = MaxHeap()
         else:
-            heap = PriorityQueue()
-        heap.init(dist_ptr, idx_ptr, n_neighbors)
+            self.heap = PriorityQueue()
+        self.heap.init(dist_ptr, idx_ptr, n_neighbors)
 
         if dualtree:
             # build a tree on query data with the same metric as self
@@ -465,14 +470,14 @@ cdef class BallTree(object):
 
             self.query_dual_(0, other, 0, n_neighbors,
                              dist_ptr, idx_ptr, reduced_dist_LB,
-                             <DTYPE_t*> bounds.data, heap)
+                             <DTYPE_t*> bounds.data)
 
         else:
             pt = <DTYPE_t*>Xarr.data
             for i in range(Xarr.shape[0]):
                 reduced_dist_LB = self.bound.min_rdist(self, 0, pt)
                 self.query_one_(0, pt, n_neighbors,
-                                dist_ptr, idx_ptr, reduced_dist_LB, heap)
+                                dist_ptr, idx_ptr, reduced_dist_LB)
 
                 dist_ptr += n_neighbors
                 idx_ptr += n_neighbors
@@ -483,7 +488,7 @@ cdef class BallTree(object):
         for i from 0 <= i < n_neighbors * n_queries:
             dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
                                                   &self.dm.params)
-        if heap.needs_final_sort():
+        if self.heap.needs_final_sort():
             for i from 0 <= i < n_queries:
                 sort_dist_idx(dist_ptr, idx_ptr, n_neighbors)
                 dist_ptr += n_neighbors
@@ -681,27 +686,21 @@ cdef class BallTree(object):
                          ITYPE_t n_neighbors,
                          DTYPE_t* near_set_dist,
                          ITYPE_t* near_set_indx,
-                         DTYPE_t reduced_dist_LB,
-                         HeapBase heap):
+                         DTYPE_t reduced_dist_LB):
         cdef DTYPE_t* data = <DTYPE_t*> self.data.data
         cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
-        cdef NodeInfo* node_info_arr = <NodeInfo*> self.node_info_arr.data
-
         cdef ITYPE_t n_features = self.data.shape[1]
+        cdef NodeInfo* node_info = self.node_info(i_node)
 
         cdef DTYPE_t dist_pt, reduced_dist_LB_1, reduced_dist_LB_2
         cdef ITYPE_t i, i1, i2
 
-        # get the node info for this node
-        cdef NodeInfo* node_info = node_info_arr + i_node
-
         # set the values in the heap
-        heap.val = near_set_dist
-        heap.idx = near_set_indx
+        self.heap.init(near_set_dist, near_set_indx, n_neighbors)
 
         #------------------------------------------------------------
         # Case 1: query point is outside node radius trim the query
-        if reduced_dist_LB > heap.largest():
+        if reduced_dist_LB > self.heap.largest():
             pass
 
         #------------------------------------------------------------
@@ -710,8 +709,8 @@ cdef class BallTree(object):
             for i from node_info.idx_start <= i < node_info.idx_end:
                 dist_pt = self.rdist(pt, data + n_features * idx_array[i])
 
-                if dist_pt < heap.largest():
-                    heap.insert(dist_pt, idx_array[i])
+                if dist_pt < self.heap.largest():
+                    self.heap.insert(dist_pt, idx_array[i])
 
         #------------------------------------------------------------
         # Case 3: Node is not a leaf.  Recursively query subnodes
@@ -725,14 +724,14 @@ cdef class BallTree(object):
             # recursively query subnodes
             if reduced_dist_LB_1 <= reduced_dist_LB_2:
                 self.query_one_(i1, pt, n_neighbors, near_set_dist,
-                                near_set_indx, reduced_dist_LB_1, heap)
+                                near_set_indx, reduced_dist_LB_1)
                 self.query_one_(i2, pt, n_neighbors, near_set_dist,
-                                near_set_indx, reduced_dist_LB_2, heap)
+                                near_set_indx, reduced_dist_LB_2)
             else:
                 self.query_one_(i2, pt, n_neighbors, near_set_dist,
-                                near_set_indx, reduced_dist_LB_2, heap)
+                                near_set_indx, reduced_dist_LB_2)
                 self.query_one_(i1, pt, n_neighbors, near_set_dist,
-                                near_set_indx, reduced_dist_LB_1, heap)
+                                near_set_indx, reduced_dist_LB_1)
 
     cdef void query_dual_(BallTree self,
                           ITYPE_t i_node1,
@@ -742,8 +741,7 @@ cdef class BallTree(object):
                           DTYPE_t* near_set_dist,
                           ITYPE_t* near_set_indx,
                           DTYPE_t reduced_dist_LB,
-                          DTYPE_t* bounds,
-                          HeapBase heap):
+                          DTYPE_t* bounds):
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef NodeInfo* node_info1 = (<NodeInfo*> self.node_info_arr.data
                                      + i_node1)
@@ -768,20 +766,20 @@ cdef class BallTree(object):
             bounds[i_node2] = -1
 
             for i2 from node_info2.idx_start <= i2 < node_info2.idx_end:
-                heap.init(near_set_dist + idx_array2[i2] * n_neighbors,
-                          near_set_indx + idx_array2[i2] * n_neighbors,
-                          n_neighbors)
-                if heap.largest() <= reduced_dist_LB:
+                self.heap.init(near_set_dist + idx_array2[i2] * n_neighbors,
+                               near_set_indx + idx_array2[i2] * n_neighbors,
+                               n_neighbors)
+                if self.heap.largest() <= reduced_dist_LB:
                     continue
 
                 for i1 from node_info1.idx_start <= i1 < node_info1.idx_end:
                     dist_pt = self.rdist(data1 + n_features * idx_array1[i1],
                                          data2 + n_features * idx_array2[i2])
-                    if dist_pt < heap.largest():
-                        heap.insert(dist_pt, idx_array1[i1])
+                    if dist_pt < self.heap.largest():
+                       self.heap.insert(dist_pt, idx_array1[i1])
                 
                 # keep track of node bound
-                bounds[i_node2] = fmax(bounds[i_node2], heap.largest())
+                bounds[i_node2] = fmax(bounds[i_node2], self.heap.largest())
             
         elif node_info1.is_leaf:
             # split node 2 and query recursively, nearest first
@@ -793,17 +791,17 @@ cdef class BallTree(object):
             if reduced_dist_LB1 < reduced_dist_LB2:
                 self.query_dual_(i_node1, other, 2 * i_node2 + 1, n_neighbors,
                                  near_set_dist, near_set_indx,
-                                 reduced_dist_LB1, bounds, heap)
+                                 reduced_dist_LB1, bounds)
                 self.query_dual_(i_node1, other, 2 * i_node2 + 2, n_neighbors,
                                  near_set_dist, near_set_indx,
-                                 reduced_dist_LB2, bounds, heap)
+                                 reduced_dist_LB2, bounds)
             else:
                 self.query_dual_(i_node1, other, 2 * i_node2 + 2, n_neighbors,
                                  near_set_dist, near_set_indx,
-                                 reduced_dist_LB2, bounds, heap)
+                                 reduced_dist_LB2, bounds)
                 self.query_dual_(i_node1, other, 2 * i_node2 + 1, n_neighbors,
                                  near_set_dist, near_set_indx,
-                                 reduced_dist_LB1, bounds, heap)
+                                 reduced_dist_LB1, bounds)
             
             # update node bound information
             bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
@@ -819,17 +817,17 @@ cdef class BallTree(object):
             if reduced_dist_LB1 < reduced_dist_LB2:
                 self.query_dual_(2 * i_node1 + 1, other, i_node2, n_neighbors,
                                  near_set_dist, near_set_indx,
-                                 reduced_dist_LB1, bounds, heap)
+                                 reduced_dist_LB1, bounds)
                 self.query_dual_(2 * i_node1 + 2, other, i_node2, n_neighbors,
                                  near_set_dist, near_set_indx,
-                                 reduced_dist_LB2, bounds, heap)
+                                 reduced_dist_LB2, bounds)
             else:
                 self.query_dual_(2 * i_node1 + 2, other, i_node2, n_neighbors,
                                  near_set_dist, near_set_indx,
-                                 reduced_dist_LB2, bounds, heap)
+                                 reduced_dist_LB2, bounds)
                 self.query_dual_(2 * i_node1 + 1, other, i_node2, n_neighbors,
                                  near_set_dist, near_set_indx,
-                                 reduced_dist_LB1, bounds, heap)
+                                 reduced_dist_LB1, bounds)
                 
         else:
             # split both nodes and query recursively
@@ -841,17 +839,17 @@ cdef class BallTree(object):
             if reduced_dist_LB1 < reduced_dist_LB2:
                 self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 1,
                                  n_neighbors, near_set_dist, near_set_indx,
-                                 reduced_dist_LB1, bounds, heap)
+                                 reduced_dist_LB1, bounds)
                 self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 1,
                                  n_neighbors, near_set_dist, near_set_indx,
-                                 reduced_dist_LB2, bounds, heap)
+                                 reduced_dist_LB2, bounds)
             else:
                 self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 1,
                                  n_neighbors, near_set_dist, near_set_indx,
-                                 reduced_dist_LB2, bounds, heap)
+                                 reduced_dist_LB2, bounds)
                 self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 1,
                                  n_neighbors, near_set_dist, near_set_indx,
-                                 reduced_dist_LB1, bounds, heap)
+                                 reduced_dist_LB1, bounds)
 
             reduced_dist_LB1 = self.bound.min_dist_dual(self, 2 * i_node1 + 1,
                                                         other, 2 * i_node2 + 2)
@@ -860,17 +858,17 @@ cdef class BallTree(object):
             if reduced_dist_LB1 < reduced_dist_LB2:
                 self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 2,
                                  n_neighbors, near_set_dist, near_set_indx,
-                                 reduced_dist_LB1, bounds, heap)
+                                 reduced_dist_LB1, bounds)
                 self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 2,
                                  n_neighbors, near_set_dist, near_set_indx,
-                                 reduced_dist_LB2, bounds, heap)
+                                 reduced_dist_LB2, bounds)
             else:
                 self.query_dual_(2 * i_node1 + 2, other, 2 * i_node2 + 2,
                                  n_neighbors, near_set_dist, near_set_indx,
-                                 reduced_dist_LB2, bounds, heap)
+                                 reduced_dist_LB2, bounds)
                 self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 2,
                                  n_neighbors, near_set_dist, near_set_indx,
-                                 reduced_dist_LB1, bounds, heap)
+                                 reduced_dist_LB1, bounds)
             
             # update node bound information
             bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
@@ -886,12 +884,10 @@ cdef class BallTree(object):
                                    int return_distance):
         cdef DTYPE_t* data = <DTYPE_t*> self.data.data
         cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
-        cdef DTYPE_t* node_centroid_arr = <DTYPE_t*>self.node_centroid_arr.data
-        cdef NodeInfo* node_info_arr = <NodeInfo*> self.node_info_arr.data
-
         cdef ITYPE_t n_features = self.data.shape[1]
-        cdef NodeInfo* node_info = node_info_arr + i_node
-        cdef DTYPE_t* node_centroid = node_centroid_arr + n_features * i_node
+
+        cdef NodeInfo* node_info = self.node_info(i_node)
+        cdef DTYPE_t* node_centroid = self.node_centroid(i_node)
 
         cdef ITYPE_t i
         cdef DTYPE_t reduced_r = self.dm.dist_to_reduced(r, &self.dm.params)
@@ -960,7 +956,13 @@ cdef class BallTree(object):
     cdef DTYPE_t rdist(BallTree self, DTYPE_t* x1, DTYPE_t* x2):
         return self.dm.reduced_dfunc(x1, x2, self.data.shape[1],
                                      &self.dm.params, -1, -1)
+
+    cdef NodeInfo* node_info(BallTree self, ITYPE_t i_node):
+        return (<NodeInfo*> self.node_info_arr.data) + i_node
     
+    cdef DTYPE_t* node_centroid(BallTree self, ITYPE_t i_node):
+        return (<DTYPE_t*> self.node_centroid_arr.data
+                + i_node * self.data.shape[1])
 
 ######################################################################
 # Helper functions for building and querying
@@ -1110,7 +1112,7 @@ cdef void sort_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
 #
 # We can have several different types of bound in a binary tree.  Here
 # we use a BallBound, a KDBound, and perhaps will extend this to similar
-# cases with periodic boundary conditions.  The node type must depend
+# cases with periodic boundary conditions.  The bound type must depend
 # on the distance metric used, and provides an interface to the distance
 # between points and to the minimum and maximum bounds between a node
 # and a point or between two nodes.
