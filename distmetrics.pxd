@@ -77,8 +77,8 @@ ctypedef DTYPE_t (*dist_conv_func)(DTYPE_t, dist_params*)
 
 cdef class DistanceMetric(object):
     # initialization information
-    cdef object metric
-    cdef object init_kwargs
+    cdef readonly object metric
+    cdef readonly object init_kwargs
 
     # C attributes: information about and access to distance functions
     cdef dist_params params

@@ -4,10 +4,8 @@
 # TODO:
 #  - documentation update with metrics
 #
-#  - currently all metrics are used without precomputed values.  This should
-#    be addressed.
-#
-#  - make query_radius play well with bound abstraction
+#  - currently all metrics are used without precomputed values.
+#    Allowing precomputed values could speed computation with some metrics.
 #
 #  - add KDBound (and perhaps periodic boundary conditions)
 #
@@ -153,13 +151,16 @@ from libc.math cimport fmax, fmin
 from distmetrics cimport DistanceMetric, DTYPE_t
 from distmetrics import DTYPE
 
-from sklearn.utils import array2d
+#from sklearn.utils import array2d
+def array2d(X, dtype=None, order=None):
+    """Returns at least 2-d array with data from X"""
+    return np.asarray(np.atleast_2d(X), dtype=dtype, order=order)
 
 ######################################################################
 # global definitions
 
 # type used for indices & counts
-# warning: there will be problems if this is switched to an unsigned type!
+# warning: there will be problems if ITYPE is switched to an unsigned type!
 ITYPE = np.int32
 ctypedef np.int32_t ITYPE_t
 
@@ -195,81 +196,8 @@ INVALID_METRICS = ['sqeuclidean', 'correlation', 'pminkowski',
 ######################################################################
 # BallTree class
 #
-cdef class BallTree(object):
-    """
-    Ball Tree for fast nearest-neighbor searches :
-
-    BallTree(X, leaf_size=20, p=2.0)
-
-    Parameters
-    ----------
-    X : array-like, shape = [n_samples, n_features]
-        n_samples is the number of points in the data set, and
-        n_features is the dimension of the parameter space.
-        Note: if X is a C-contiguous array of doubles then data will
-        not be copied. Otherwise, an internal copy will be made.
-
-    leaf_size : positive integer (default = 20)
-        Number of points at which to switch to brute-force. Changing
-        leaf_size will not affect the results of a query, but can
-        significantly impact the speed of a query and the memory required
-        to store the built ball tree.  The amount of memory needed to
-        store the tree scales as
-        2 ** (1 + floor(log2((n_samples - 1) / leaf_size))) - 1
-        For a specified ``leaf_size``, a leaf node is guaranteed to
-        satisfy ``leaf_size <= n_points <= 2 * leaf_size``, except in
-        the case that ``n_samples < leaf_size``.
-
-    metric : string, function, or float
-        distance metric.  See distmetrics docstring for available values.
-
-    p : distance metric for the BallTree.  ``p`` encodes the Minkowski
-        p-distance::
-
-            D = sum((X[i] - X[j]) ** p) ** (1. / p)
-
-        p must be greater than or equal to 1, so that the triangle
-        inequality will hold.  If ``p == np.inf``, then the distance is
-        equivalent to::
-
-            D = max(X[i] - X[j])
-
-    Attributes
-    ----------
-    data : np.ndarray
-        The training data
-
-    Examples
-    --------
-    Query for k-nearest neighbors
-
-        # >>> import numpy as np
-        # >>> np.random.seed(0)
-        # >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
-        # >>> ball_tree = BallTree(X, leaf_size=2)
-        # >>> dist, ind = ball_tree.query(X[0], n_neighbors=3)
-        # >>> print ind  # indices of 3 closest neighbors
-        # [0 3 1]
-        # >>> print dist  # distances to 3 closest neighbors
-        # [ 0.          0.19662693  0.29473397]
-
-    Pickle and Unpickle a ball tree (using protocol = 2).  Note that the
-    state of the tree is saved in the pickle operation: the tree is not
-    rebuilt on un-pickling
-
-        # >>> import numpy as np
-        # >>> import pickle
-        # >>> np.random.seed(0)
-        # >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
-        # >>> ball_tree = BallTree(X, leaf_size=2)
-        # >>> s = pickle.dumps(ball_tree, protocol=2)
-        # >>> ball_tree_copy = pickle.loads(s)
-        # >>> dist, ind = ball_tree_copy.query(X[0], k=3)
-        # >>> print ind  # indices of 3 closest neighbors
-        # [0 3 1]
-        # >>> print dist  # distances to 3 closest neighbors
-        # [ 0.          0.19662693  0.29473397]
-    """
+cdef class _BinaryTree(object):
+    """Base class for KDTree and BallTree"""
     cdef readonly np.ndarray data
     cdef np.ndarray idx_array
     cdef np.ndarray node_centroid_arr
@@ -297,13 +225,14 @@ cdef class BallTree(object):
         self.bound = BoundBase()
         self.heap = HeapBase()
 
-    def __init__(self, X, leaf_size=20, 
-                 metric="minkowski", p=2, **kwargs):
-        self.bound = BallBound()
+    def __init__(self, X, leaf_size=20, metric="minkowski", p=2, **kwargs):
+        self.bound = BoundBase()
+        self.init_common(X, leaf_size, metric, p=p, **kwargs)
+        raise ValueError("_BinaryTree is an abstract base class.  "
+                         "Use BallTree or KDTree.")
 
-        if metric in INVALID_METRICS:
-            raise ValueError("metric %s does not satisfy the triangle "
-                             "inequality: BallTree cannot be used")
+    def init_common(self, X, leaf_size=20, 
+                    metric="minkowski", p=2, **kwargs):
         self.data = np.asarray(X, dtype=DTYPE, order='C')
 
         if self.data.size == 0:
@@ -315,12 +244,20 @@ cdef class BallTree(object):
         if leaf_size < 1:
             raise ValueError("leaf_size must be greater than or equal to 1")
         self.leaf_size = leaf_size
-        
-        # set up dist_metric if needed
-        self.dm = DistanceMetric(metric, p=p, **kwargs)
-        if self.dm.learn_params_from_data:
-            self.dm.set_params_from_data(self.data)
 
+        # set up dist_metric
+        if isinstance(metric, DistanceMetric):
+            dm = metric
+            metric = dm.metric
+        else:
+            self.dm = DistanceMetric(metric, p=p, **kwargs)
+            if self.dm.learn_params_from_data:
+                self.dm.set_params_from_data(self.data)
+            
+        if metric in INVALID_METRICS:
+            raise ValueError("metric %s does not satisfy the triangle "
+                             "inequality: BallTree cannot be used")
+        
         cdef ITYPE_t n_samples = self.data.shape[0]
         cdef ITYPE_t n_features = self.data.shape[1]
 
@@ -339,7 +276,7 @@ cdef class BallTree(object):
 
     def __reduce__(self):
         """reduce method used for pickling"""
-        return (newObj, (BallTree,), self.__getstate__())
+        return (newObj, (self.__class__,), self.__getstate__())
 
     def __getstate__(self):
         """get state for pickling"""
@@ -350,21 +287,20 @@ cdef class BallTree(object):
                 self.leaf_size,
                 self.n_levels,
                 self.n_nodes,
-                self.dm)
+                self.dm,
+                self.bound)
 
     def __setstate__(self, state):
         """set state for pickling"""
-        self.data = state[0]
-        self.idx_array = state[1]
-        self.node_centroid_arr = state[2]
-        self.node_info_arr = state[3]
-        self.leaf_size = state[4]
-        self.n_levels = state[5]
-        self.n_nodes = state[6]
-        self.dm = state[7]
-
-        self.bound = BallBound()
-        self.heap = HeapBase()
+        (self.data,
+         self.idx_array,
+         self.node_centroid_arr,
+         self.node_info_arr,
+         self.leaf_size,
+         self.n_levels,
+         self.n_nodes,
+         self.dm,
+         self.bound) = state
 
     def query(self, X, k=1, return_distance=True, dualtree=False):
         """
@@ -455,10 +391,9 @@ cdef class BallTree(object):
 
         if dualtree:
             # build a tree on query data with the same metric as self
-            other = BallTree(X, leaf_size=self.leaf_size,
-                             metric=self.dm.metric, **self.dm.init_kwargs)
-            if other.dm.learn_params_from_data:
-                other.dm.set_params_from_data(self.data)
+            other = self.__class__(X, leaf_size=self.leaf_size,
+                                   metric=self.dm,
+                                   **self.dm.init_kwargs)
 
             reduced_dist_LB = self.bound.min_dist_dual(self, 0, other, 0)
 
@@ -652,7 +587,7 @@ cdef class BallTree(object):
             return idx_array.reshape(orig_shape[:-1])
 
     @cython.cdivision(True)
-    cdef void _recursive_build(BallTree self, ITYPE_t i_node,
+    cdef void _recursive_build(self, ITYPE_t i_node,
                                ITYPE_t idx_start, ITYPE_t idx_end):
         cdef ITYPE_t imax
         cdef ITYPE_t n_features = self.data.shape[1]
@@ -680,7 +615,7 @@ cdef class BallTree(object):
             self._recursive_build(2 * i_node + 2,
                                   idx_start + n_mid, idx_end)
 
-    cdef void query_one_(BallTree self,
+    cdef void query_one_(self,
                          ITYPE_t i_node,
                          DTYPE_t* pt,
                          ITYPE_t n_neighbors,
@@ -734,9 +669,9 @@ cdef class BallTree(object):
                 self.query_one_(i1, pt, n_neighbors, near_set_dist,
                                 near_set_indx, reduced_dist_LB_1)
 
-    cdef void query_dual_(BallTree self,
+    cdef void query_dual_(self,
                           ITYPE_t i_node1,
-                          BallTree other,
+                          _BinaryTree other,
                           ITYPE_t i_node2,
                           ITYPE_t n_neighbors,
                           DTYPE_t* near_set_dist,
@@ -885,12 +820,12 @@ cdef class BallTree(object):
             bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
                                    bounds[2 * i_node2 + 2])
 
-    cdef ITYPE_t query_radius_one_(BallTree self,
+    cdef ITYPE_t query_radius_one_(self,
                                    ITYPE_t i_node,
                                    DTYPE_t* pt, DTYPE_t r,
                                    ITYPE_t* indices,
                                    DTYPE_t* distances,
-                                   ITYPE_t idx_i,
+                                   ITYPE_t count,
                                    int count_only,
                                    int return_distance):
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
@@ -898,82 +833,161 @@ cdef class BallTree(object):
         cdef ITYPE_t n_features = self.data.shape[1]
 
         cdef NodeInfo* node_info = self.node_info(i_node)
-        cdef DTYPE_t* node_centroid = self.node_centroid(i_node)
 
         cdef ITYPE_t i
-        cdef DTYPE_t reduced_r = self.dm.dist_to_reduced(r, &self.dm.params)
-        cdef DTYPE_t dist_pt
+        cdef DTYPE_t reduced_r
 
-        dist_pt = self.dist(pt, node_centroid)
+        cdef DTYPE_t dist_pt, dist_LB, dist_UB
+        self.bound.minmax_dist(self, i_node, pt, &dist_LB, &dist_UB)
 
         #------------------------------------------------------------
         # Case 1: all node points are outside distance r.
         #         prune this branch.
-        if dist_pt - node_info.radius > r:
+        if dist_LB > r:
             pass
 
         #------------------------------------------------------------
         # Case 2: all node points are within distance r
         #         add all points to neighbors
-        elif dist_pt + node_info.radius < r:
+        elif dist_UB <= r:
             if count_only:
-                idx_i += (node_info.idx_end - node_info.idx_start)
+                count += (node_info.idx_end - node_info.idx_start)
             else:
                 for i from node_info.idx_start <= i < node_info.idx_end:
-                    if (idx_i < 0) or (idx_i >= self.data.shape[0]):
-                        raise ValueError("idx_i too big")
-                    indices[idx_i] = idx_array[i]
+                    if (count < 0) or (count >= self.data.shape[0]):
+                        raise ValueError("count too big")
+                    indices[count] = idx_array[i]
                     if return_distance:
-                        dist_pt = self.dist(pt, (data + n_features
-                                                 * idx_array[i]))
-                        distances[idx_i] = dist_pt
-                    idx_i += 1
+                        distances[count] = self.dist(pt, (data + n_features
+                                                          * idx_array[i]))
+                    count += 1
 
         #------------------------------------------------------------
         # Case 3: this is a leaf node.  Go through all points to
         #         determine if they fall within radius
         elif node_info.is_leaf:
+            reduced_r = self.dm.dist_to_reduced(r, &self.dm.params)
+
             for i from node_info.idx_start <= i < node_info.idx_end:
                 dist_pt = self.rdist(pt, (data + n_features
                                           * idx_array[i]))
                 if dist_pt <= reduced_r:
-                    if (idx_i < 0) or (idx_i >= self.data.shape[0]):
-                        raise ValueError("Fatal: idx_i out of range")
+                    if (count < 0) or (count >= self.data.shape[0]):
+                        raise ValueError("Fatal: count out of range")
                     if count_only:
                         pass
                     else:
-                        indices[idx_i] = idx_array[i]
+                        indices[count] = idx_array[i]
                         if return_distance:
-                            distances[idx_i] = self.dm.reduced_to_dist(
+                            distances[count] = self.dm.reduced_to_dist(
                                                       dist_pt, &self.dm.params)
-                    idx_i += 1
+                    count += 1
 
         #------------------------------------------------------------
         # Case 4: Node is not a leaf.  Recursively query subnodes
         else:
-            idx_i = self.query_radius_one_(2 * i_node + 1, pt, r,
-                                           indices, distances, idx_i,
+            count = self.query_radius_one_(2 * i_node + 1, pt, r,
+                                           indices, distances, count,
                                            count_only, return_distance)
-            idx_i = self.query_radius_one_(2 * i_node + 2, pt, r,
-                                           indices, distances, idx_i,
+            count = self.query_radius_one_(2 * i_node + 2, pt, r,
+                                           indices, distances, count,
                                            count_only, return_distance)
 
-        return idx_i
+        return count
 
-    cdef DTYPE_t dist(BallTree self, DTYPE_t* x1, DTYPE_t* x2):
+    cdef DTYPE_t dist(self, DTYPE_t* x1, DTYPE_t* x2):
         return self.dm.dfunc(x1, x2, self.data.shape[1],
                              &self.dm.params, -1, -1)
 
-    cdef DTYPE_t rdist(BallTree self, DTYPE_t* x1, DTYPE_t* x2):
+    cdef DTYPE_t rdist(self, DTYPE_t* x1, DTYPE_t* x2):
         return self.dm.reduced_dfunc(x1, x2, self.data.shape[1],
                                      &self.dm.params, -1, -1)
 
-    cdef NodeInfo* node_info(BallTree self, ITYPE_t i_node):
+    cdef NodeInfo* node_info(self, ITYPE_t i_node):
         return <NodeInfo*> np.PyArray_DATA(self.node_info_arr) + i_node
     
-    cdef DTYPE_t* node_centroid(BallTree self, ITYPE_t i_node):
+    cdef DTYPE_t* node_centroid(self, ITYPE_t i_node):
         return (<DTYPE_t*> np.PyArray_DATA(self.node_centroid_arr)
                 + i_node * self.data.shape[1])
+
+cdef class BallTree(_BinaryTree):
+    """
+    Ball Tree for fast nearest-neighbor searches :
+
+    BallTree(X, leaf_size=20, p=2.0)
+
+    Parameters
+    ----------
+    X : array-like, shape = [n_samples, n_features]
+        n_samples is the number of points in the data set, and
+        n_features is the dimension of the parameter space.
+        Note: if X is a C-contiguous array of doubles then data will
+        not be copied. Otherwise, an internal copy will be made.
+
+    leaf_size : positive integer (default = 20)
+        Number of points at which to switch to brute-force. Changing
+        leaf_size will not affect the results of a query, but can
+        significantly impact the speed of a query and the memory required
+        to store the built ball tree.  The amount of memory needed to
+        store the tree scales as
+        2 ** (1 + floor(log2((n_samples - 1) / leaf_size))) - 1
+        For a specified ``leaf_size``, a leaf node is guaranteed to
+        satisfy ``leaf_size <= n_points <= 2 * leaf_size``, except in
+        the case that ``n_samples < leaf_size``.
+
+    metric : string, function, or float
+        distance metric.  See distmetrics docstring for available values.
+
+    p : distance metric for the BallTree.  ``p`` encodes the Minkowski
+        p-distance::
+
+            D = sum((X[i] - X[j]) ** p) ** (1. / p)
+
+        p must be greater than or equal to 1, so that the triangle
+        inequality will hold.  If ``p == np.inf``, then the distance is
+        equivalent to::
+
+            D = max(X[i] - X[j])
+
+    Attributes
+    ----------
+    data : np.ndarray
+        The training data
+
+    Examples
+    --------
+    Query for k-nearest neighbors
+
+        # >>> import numpy as np
+        # >>> np.random.seed(0)
+        # >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
+        # >>> ball_tree = BallTree(X, leaf_size=2)
+        # >>> dist, ind = ball_tree.query(X[0], n_neighbors=3)
+        # >>> print ind  # indices of 3 closest neighbors
+        # [0 3 1]
+        # >>> print dist  # distances to 3 closest neighbors
+        # [ 0.          0.19662693  0.29473397]
+
+    Pickle and Unpickle a ball tree (using protocol = 2).  Note that the
+    state of the tree is saved in the pickle operation: the tree is not
+    rebuilt on un-pickling
+
+        # >>> import numpy as np
+        # >>> import pickle
+        # >>> np.random.seed(0)
+        # >>> X = np.random.random((10,3))  # 10 points in 3 dimensions
+        # >>> ball_tree = BallTree(X, leaf_size=2)
+        # >>> s = pickle.dumps(ball_tree, protocol=2)
+        # >>> ball_tree_copy = pickle.loads(s)
+        # >>> dist, ind = ball_tree_copy.query(X[0], k=3)
+        # >>> print ind  # indices of 3 closest neighbors
+        # [0 3 1]
+        # >>> print dist  # distances to 3 closest neighbors
+        # [ 0.          0.19662693  0.29473397]
+    """
+    def __init__(self, X, leaf_size=20, metric="minkowski", p=2, **kwargs):
+        self.bound = BallBound()
+        self.init_common(X, leaf_size, metric, p=p, **kwargs)
 
 ######################################################################
 # Helper functions for building and querying
@@ -1102,42 +1116,51 @@ cdef void sort_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
 # implemented as c structs with the associated fast access
 cdef class BoundBase:
     """base class for bound interface"""
-    cdef int init_node(self, BallTree bt, ITYPE_t i_node,
+    cdef int init_node(self, _BinaryTree bt, ITYPE_t i_node,
                        ITYPE_t idx_start, ITYPE_t idx_end):
         return 0
 
-    cdef DTYPE_t min_dist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
+    def __reduce__(self):
+        """reduce method used for pickling"""
+        return (newObj, (self.__class__,))
+
+    cdef DTYPE_t min_dist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
         return 0.0
     
-    cdef DTYPE_t min_rdist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
+    cdef DTYPE_t min_rdist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
         return 0.0
 
-    cdef DTYPE_t max_dist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
+    cdef DTYPE_t max_dist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
         return INF
 
-    cdef DTYPE_t max_rdist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
+    cdef DTYPE_t max_rdist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
         return INF
 
-    cdef DTYPE_t min_dist_dual(self, BallTree bt1, ITYPE_t i_node1,
-                               BallTree bt2, ITYPE_t i_node2):
+    cdef void minmax_dist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt,
+                          DTYPE_t* dmin, DTYPE_t* dmax):
+        dmin[0] = 0
+        dmax[0] = INF
+
+    cdef DTYPE_t min_dist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
+                               _BinaryTree bt2, ITYPE_t i_node2):
         return 0.0
 
-    cdef DTYPE_t min_rdist_dual(self, BallTree bt1, ITYPE_t i_node1,
-                                BallTree bt2, ITYPE_t i_node2):
+    cdef DTYPE_t min_rdist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
+                                _BinaryTree bt2, ITYPE_t i_node2):
         return 0.0
 
-    cdef DTYPE_t max_dist_dual(self, BallTree bt1, ITYPE_t i_node1,
-                               BallTree bt2, ITYPE_t i_node2):
+    cdef DTYPE_t max_dist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
+                               _BinaryTree bt2, ITYPE_t i_node2):
         return INF
 
-    cdef DTYPE_t max_rdist_dual(self, BallTree bt1, ITYPE_t i_node1,
-                                BallTree bt2, ITYPE_t i_node2):
+    cdef DTYPE_t max_rdist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
+                                _BinaryTree bt2, ITYPE_t i_node2):
         return INF
 
 
 cdef class BallBound(BoundBase):
     @cython.cdivision(True)
-    cdef int init_node(self, BallTree bt, ITYPE_t i_node,
+    cdef int init_node(self, _BinaryTree bt, ITYPE_t i_node,
                        ITYPE_t idx_start, ITYPE_t idx_end):
         cdef ITYPE_t n_features = bt.data.shape[1]
         cdef ITYPE_t n_points = idx_end - idx_start
@@ -1184,19 +1207,29 @@ cdef class BallBound(BoundBase):
         
         return node_info.is_leaf
 
-    cdef DTYPE_t min_dist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
+    cdef DTYPE_t min_dist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
         cdef ITYPE_t n_features = bt.data.shape[1]
         cdef NodeInfo* info = bt.node_info(i_node)
         cdef DTYPE_t* centroid = bt.node_centroid(i_node)
 
         return fmax(0, bt.dist(pt, centroid) - info.radius)
 
-    cdef DTYPE_t min_rdist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
+    cdef DTYPE_t min_rdist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
         return bt.dm.dist_to_reduced(self.min_dist(bt, i_node, pt),
                                      &bt.dm.params)
 
-    cdef DTYPE_t min_dist_dual(self, BallTree bt1, ITYPE_t i_node1,
-                               BallTree bt2, ITYPE_t i_node2):
+    cdef void minmax_dist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt,
+                          DTYPE_t* dmin, DTYPE_t* dmax):
+        cdef ITYPE_t n_features = bt.data.shape[1]
+        cdef NodeInfo* info = bt.node_info(i_node)
+        cdef DTYPE_t* centroid = bt.node_centroid(i_node)
+        cdef DTYPE_t dist_pt = bt.dist(pt, centroid)
+
+        dmin[0] = fmax(0, dist_pt - info.radius)
+        dmax[0] = dist_pt + info.radius
+
+    cdef DTYPE_t min_dist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
+                               _BinaryTree bt2, ITYPE_t i_node2):
         cdef ITYPE_t n_features = bt1.data.shape[1]
         cdef NodeInfo* info1 = bt1.node_info(i_node1)
         cdef NodeInfo* info2 = bt2.node_info(i_node2)
@@ -1207,8 +1240,8 @@ cdef class BallBound(BoundBase):
                         - info1.radius
                         - info2.radius))
 
-    cdef DTYPE_t rdist_LB_dual(self, BallTree bt1, ITYPE_t i_node1,
-                               BallTree bt2, ITYPE_t i_node2):
+    cdef DTYPE_t rdist_LB_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
+                               _BinaryTree bt2, ITYPE_t i_node2):
         return bt1.dm.dist_to_reduced(self.min_dist_dual(bt1, i_node1,
                                                          bt2, i_node2),
                                       &bt1.dm.params)
