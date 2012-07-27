@@ -335,7 +335,7 @@ cdef class BallTree(object):
                                           dtype=DTYPE, order='C')
         self.node_info_arr = np.empty(self.n_nodes * sizeof(NodeInfo),
                                       dtype='c', order='C')
-        self.recursive_build(0, 0, n_samples)
+        self._recursive_build(0, 0, n_samples)
 
     def __reduce__(self):
         """reduce method used for pickling"""
@@ -652,9 +652,8 @@ cdef class BallTree(object):
             return idx_array.reshape(orig_shape[:-1])
 
     @cython.cdivision(True)
-    cdef void recursive_build(BallTree self, ITYPE_t i_node,
-                              ITYPE_t idx_start, ITYPE_t idx_end):
-        cdef int leaf
+    cdef void _recursive_build(BallTree self, ITYPE_t i_node,
+                               ITYPE_t idx_start, ITYPE_t idx_end):
         cdef ITYPE_t imax
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef ITYPE_t n_points = idx_end - idx_start
@@ -664,7 +663,7 @@ cdef class BallTree(object):
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
 
         # initialize node.
-        leaf = self.bound.init_node(self, i_node, idx_start, idx_end)
+        cdef int leaf = self.bound.init_node(self, i_node, idx_start, idx_end)
         
         if leaf:
             pass
@@ -676,10 +675,10 @@ cdef class BallTree(object):
             partition_indices(data, idx_array, i_max, n_mid,
                               n_features, n_points)
 
-            self.recursive_build(2 * i_node + 1,
-                                 idx_start, idx_start + n_mid)
-            self.recursive_build(2 * i_node + 2,
-                                 idx_start + n_mid, idx_end)
+            self._recursive_build(2 * i_node + 1,
+                                  idx_start, idx_start + n_mid)
+            self._recursive_build(2 * i_node + 2,
+                                  idx_start + n_mid, idx_end)
 
     cdef void query_one_(BallTree self,
                          ITYPE_t i_node,
@@ -700,7 +699,8 @@ cdef class BallTree(object):
         self.heap.init(near_set_dist, near_set_indx, n_neighbors)
 
         #------------------------------------------------------------
-        # Case 1: query point is outside node radius trim the query
+        # Case 1: query point is outside node radius:
+        #         trim it from the query
         if reduced_dist_LB > self.heap.largest():
             pass
 
@@ -744,8 +744,9 @@ cdef class BallTree(object):
                           DTYPE_t reduced_dist_LB,
                           DTYPE_t* bounds):
         cdef ITYPE_t n_features = self.data.shape[1]
+
         cdef NodeInfo* node_info1 = self.node_info(i_node1)
-        cdef NodeInfo* node_info2 = self.node_info(i_node2)
+        cdef NodeInfo* node_info2 = other.node_info(i_node2)
         
         cdef DTYPE_t* data1 = <DTYPE_t*> np.PyArray_DATA(self.data)
         cdef DTYPE_t* data2 = <DTYPE_t*> np.PyArray_DATA(other.data)
@@ -756,18 +757,23 @@ cdef class BallTree(object):
         cdef DTYPE_t dist_pt, reduced_dist_LB1, reduced_dist_LB2
         cdef ITYPE_t i1, i2
 
+        #------------------------------------------------------------
+        # Case 1: nodes are further apart than the current bound:
+        #         trim both from the query
         if reduced_dist_LB > bounds[i_node2]:
-            # trim both nodes
             pass
+
+        #------------------------------------------------------------
+        # Case 2: both nodes are leaves:
+        #         do a brute-force search comparing all pairs
         elif node_info1.is_leaf and node_info2.is_leaf:
-            # both are leaves: compare all points
-            # and update set of nearest neighbors
             bounds[i_node2] = -1
 
             for i2 from node_info2.idx_start <= i2 < node_info2.idx_end:
                 self.heap.init(near_set_dist + idx_array2[i2] * n_neighbors,
                                near_set_indx + idx_array2[i2] * n_neighbors,
                                n_neighbors)
+
                 if self.heap.largest() <= reduced_dist_LB:
                     continue
 
@@ -780,8 +786,10 @@ cdef class BallTree(object):
                 # keep track of node bound
                 bounds[i_node2] = fmax(bounds[i_node2], self.heap.largest())
             
+        #------------------------------------------------------------
+        # Case 3a: node 1 is a leaf: split node 2 and recursively
+        #          query, starting with the nearest node
         elif node_info1.is_leaf:
-            # split node 2 and query recursively, nearest first
             reduced_dist_LB1 = self.bound.min_dist_dual(self, i_node1,
                                                         other, 2 * i_node2 + 1)
             reduced_dist_LB2 = self.bound.min_dist_dual(self, i_node1,
@@ -806,8 +814,10 @@ cdef class BallTree(object):
             bounds[i_node2] = fmax(bounds[2 * i_node2 + 1],
                                    bounds[2 * i_node2 + 2])
             
+        #------------------------------------------------------------
+        # Case 3b: node 2 is a leaf: split node 1 and recursively
+        #          query, starting with the nearest node
         elif node_info2.is_leaf:
-            # split node 1 and query recursively, nearest first
             reduced_dist_LB1 = self.bound.min_dist_dual(self, 2 * i_node1 + 1,
                                                         other, i_node2)
             reduced_dist_LB2 = self.bound.min_dist_dual(self, 2 * i_node1 + 2,
@@ -827,9 +837,11 @@ cdef class BallTree(object):
                 self.query_dual_(2 * i_node1 + 1, other, i_node2, n_neighbors,
                                  near_set_dist, near_set_indx,
                                  reduced_dist_LB1, bounds)
-                
+        
+        #------------------------------------------------------------
+        # Case 4: neither node is a leaf:
+        #         split both and recursively query all four pairs
         else:
-            # split both nodes and query recursively
             reduced_dist_LB1 = self.bound.min_dist_dual(self, 2 * i_node1 + 1,
                                                         other, 2 * i_node2 + 1)
             reduced_dist_LB2 = self.bound.min_dist_dual(self, 2 * i_node1 + 2,
@@ -966,38 +978,6 @@ cdef class BallTree(object):
 ######################################################################
 # Helper functions for building and querying
 #
-@cython.profile(False)
-cdef inline void copy_array(DTYPE_t* x, DTYPE_t* y, ITYPE_t n):
-    # copy array y into array x
-    cdef ITYPE_t i
-    for i from 0 <= i < n:
-        x[i] = y[i]
-
-
-@cython.cdivision(True)
-cdef void compute_centroid(DTYPE_t* centroid,
-                           DTYPE_t* data,
-                           ITYPE_t* node_indices,
-                           ITYPE_t n_features,
-                           ITYPE_t n_points):
-    # `centroid` points to an array of length n_features
-    # `data` points to an array of length n_samples * n_features
-    # `node_indices` = idx_array + idx_start
-    cdef DTYPE_t *this_pt
-    cdef ITYPE_t i, j
-
-    for j from 0 <= j < n_features:
-        centroid[j] = 0
-
-    for i from 0 <= i < n_points:
-        this_pt = data + n_features * node_indices[i]
-        for j from 0 <= j < n_features:
-            centroid[j] += this_pt[j]
-
-    for j from 0 <= j < n_features:
-        centroid[j] /= n_points
-
-
 cdef ITYPE_t find_split_dim(DTYPE_t* data,
                             ITYPE_t* node_indices,
                             ITYPE_t n_features,
@@ -1116,12 +1096,10 @@ cdef void sort_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
 # between points and to the minimum and maximum bounds between a node
 # and a point or between two nodes.
 #
-# note that we are *not* implemeting the tree as a collection of nodes:
-# this is mainly to avoid memory allocation and deallocation, and to allow
-# the resulting tree to be pickled via picklability of numpy arrays.
-# these classes function more as mixins.  True mixins are not supported by
-# the python class hierarchy, so instead they take all relevant parameters
-# as arguments.
+# These classes function more as mixins.  True mixins are not supported by
+# the cython class hierarchy, so instead we use cdef'd attributes of the
+# binary tree class.  As long as these are declared correctly, they'll be
+# implemented as c structs with the associated fast access
 cdef class BoundBase:
     """base class for bound interface"""
     cdef int init_node(self, BallTree bt, ITYPE_t i_node,

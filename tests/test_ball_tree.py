@@ -17,6 +17,7 @@ class TestBallTree:
     def __init__(self, n_samples=100, n_features=5, rseed=0):
         np.random.seed(rseed)
         self.X = np.random.random((n_samples, n_features))
+        self.Y = np.random.random((n_samples, n_features))
         self.Xbool = (np.random.random(size=(10, 10)) >= 0.5).astype(float)
         self.Ybool = (np.random.random(size=(10, 10)) >= 0.5).astype(float)
         
@@ -58,8 +59,8 @@ class TestBallTree:
                              }
 
     def _check_query_knn(self, bt, kdt, k, dualtree=False):
-        dist_bt, ind_bt = bt.query(self.X, k=k, dualtree=dualtree)
-        dist_kd, ind_kd = kdt.query(self.X, k=k)
+        dist_bt, ind_bt = bt.query(self.Y, k=k, dualtree=dualtree)
+        dist_kd, ind_kd = kdt.query(self.Y, k=k)
 
         if k == 1:
             dist_kd = dist_kd[:, None]
