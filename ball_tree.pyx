@@ -5,8 +5,6 @@
 # TODO:
 #  - documentation update with metrics
 #
-#  - code cleanup, make sure all variables are declared
-#
 #  - currently all metrics are used without precomputed values.  This should
 #    be addressed.
 #
@@ -14,12 +12,11 @@
 #    can be done, but not sure if it will lead to a speed penalty...  Create
 #    kd-tree node type as well?
 #
-#  - query_self method (common case)
-#
 #  - correlation function query
 #
 # Thoughts:
-#  what about using fibonacci heaps to keep track of visited nodes?
+#  what about using fibonacci heaps to keep track of visited nodes?  This is
+#  fairly easy to try out with the HeapBase abstraction.
 
 """
 =========
@@ -166,6 +163,8 @@ from sklearn.utils import array2d
 # warning: there will be problems if this is switched to an unsigned type!
 ITYPE = np.int32
 ctypedef np.int32_t ITYPE_t
+
+cdef DTYPE_t INF = np.inf
 
 ######################################################################
 # NodeInfo struct
@@ -332,7 +331,7 @@ cdef class BallTree(object):
 
         self.node_info_arr = np.empty(self.n_nodes * sizeof(NodeInfo),
                                       dtype='c', order='C')
-        self.build_tree_()
+        self.recursive_build(0, 0, n_samples)
 
     def __reduce__(self):
         """reduce method used for pickling"""
@@ -425,7 +424,7 @@ cdef class BallTree(object):
         # allocate distances and indices for return
         cdef np.ndarray distances = np.empty((X.shape[0], n_neighbors),
                                              dtype=DTYPE)
-        distances.fill(np.inf)
+        distances.fill(INF)
 
         cdef np.ndarray idx_array = np.zeros((X.shape[0], n_neighbors),
                                              dtype=ITYPE)
@@ -462,7 +461,7 @@ cdef class BallTree(object):
             # in each node of the "other" tree.  This makes it so that we
             # don't need to repeatedly search every point in the node.
             bounds = np.empty(other.data.shape[0])
-            bounds.fill(np.inf)
+            bounds.fill(INF)
 
             self.query_dual_(0, other, 0, n_neighbors,
                              dist_ptr, idx_ptr, reduced_dist_LB,
@@ -648,138 +647,33 @@ cdef class BallTree(object):
             return idx_array.reshape(orig_shape[:-1])
 
     @cython.cdivision(True)
-    cdef void build_tree_(BallTree self):
-        cdef DTYPE_t* data = <DTYPE_t*> self.data.data
-        cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
-        cdef DTYPE_t* node_centroid_arr = <DTYPE_t*>self.node_centroid_arr.data
-        cdef NodeInfo* node_info_arr = <NodeInfo*> self.node_info_arr.data
-
-        cdef ITYPE_t n_samples = self.data.shape[0]
+    cdef void recursive_build(BallTree self, ITYPE_t i_node,
+                              ITYPE_t idx_start, ITYPE_t idx_end):
+        cdef int leaf
+        cdef ITYPE_t imax
         cdef ITYPE_t n_features = self.data.shape[1]
+        cdef ITYPE_t n_points = idx_end - idx_start
+        cdef ITYPE_t n_mid = n_points / 2
+        cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data + idx_start
+        cdef DTYPE_t* data = <DTYPE_t*> self.data.data
 
-        cdef ITYPE_t idx_start, idx_end, n_points
-        cdef DTYPE_t radius
-        cdef ITYPE_t i, i_node, i_parent
+        # initialize node.
+        leaf = self.bound.init_node(self, i_node, idx_start, idx_end)
+        
+        if leaf:
+            pass
+        else:  # split node and recursively construct child nodes.
+            # determine dimension on which to split
+            i_max = find_split_dim(data, idx_array, n_features, n_points)
 
-        cdef DTYPE_t* centroid = node_centroid_arr
-        cdef NodeInfo* node_info = node_info_arr
-        cdef NodeInfo* parent_info
-        cdef DTYPE_t* point
+            # partition indices along this dimension
+            partition_indices(data, idx_array, i_max, n_mid,
+                              n_features, n_points)
 
-        #------------------------------------------------------------
-        # initialize the root node
-        node_info.idx_start = 0
-        node_info.idx_end = n_samples
-        n_points = n_samples
-
-        # determine Node centroid
-        compute_centroid(centroid, data, idx_array,
-                         n_features, n_samples)
-
-        # determine Node radius
-        radius = 0
-        for i from node_info.idx_start <= i < node_info.idx_end:
-            radius = fmax(radius,
-                          self.rdist(centroid,
-                                     data + n_features * idx_array[i]))
-        node_info.radius = self.dm.reduced_to_dist(radius, &self.dm.params)
-
-        # check if this is a leaf
-        if self.n_nodes == 1:
-            node_info.is_leaf = 1
-        else:
-            node_info.is_leaf = 0
-
-            # find dimension with largest spread
-            i_max = find_split_dim(data, idx_array + node_info.idx_start,
-                                   n_features, n_points)
-
-            # sort idx_array along this dimension
-            partition_indices(data,
-                              idx_array + node_info.idx_start,
-                              i_max,
-                              n_points / 2,
-                              n_features,
-                              n_points)
-
-        #------------------------------------------------------------
-        # cycle through all child nodes
-        for i_node from 1 <= i_node < self.n_nodes:
-            i_parent = (i_node - 1) / 2
-            parent_info = node_info_arr + i_parent
-
-            node_info = node_info_arr + i_node
-
-            if parent_info.is_leaf:
-                # sanity check.  This should never happen
-                raise ValueError("Fatal: parent is a leaf. "
-                                 "Memory layout is flawed")
-
-            if i_node < self.n_nodes / 2:
-                node_info.is_leaf = 0
-            else:
-                node_info.is_leaf = 1
-
-            centroid = node_centroid_arr + i_node * n_features
-
-            # find indices for this node
-            idx_start = parent_info.idx_start
-            idx_end = parent_info.idx_end
-
-            if i_node % 2 == 1:
-                idx_start = (idx_start + idx_end) / 2
-            else:
-                idx_end = (idx_start + idx_end) / 2
-
-            node_info.idx_start = idx_start
-            node_info.idx_end = idx_end
-
-            n_points = idx_end - idx_start
-
-            if n_points == 0:
-                # sanity check: this should never happen
-                raise ValueError("Fatal: zero-sized node. "
-                                 "Memory layout is flawed")
-
-            elif n_points == 1:
-                #copy this point to centroid
-                copy_array(centroid,
-                           data + idx_array[idx_start] * n_features,
-                           n_features)
-
-                #store radius in array
-                node_info.radius = 0
-
-                #is a leaf
-                node_info.is_leaf = 1
-
-            else:
-                # determine Node centroid
-                compute_centroid(centroid, data, idx_array + idx_start,
-                                 n_features, n_points)
-
-                # determine Node radius
-                radius = 0
-                for i from idx_start <= i < idx_end:
-                    radius = fmax(radius,
-                                  self.rdist(centroid,
-                                             data + n_features * idx_array[i]))
-
-                node_info.radius = self.dm.reduced_to_dist(radius,
-                                                           &self.dm.params)
-
-                if not node_info.is_leaf:
-                    # find dimension with largest spread
-                    i_max = find_split_dim(data, idx_array + idx_start,
-                                           n_features, n_points)
-
-                    # sort indices along this dimension
-                    partition_indices(data,
-                                      idx_array + idx_start,
-                                      i_max,
-                                      n_points / 2,
-                                      n_features,
-                                      n_points)
+            self.recursive_build(2 * i_node + 1,
+                                 idx_start, idx_start + n_mid)
+            self.recursive_build(2 * i_node + 2,
+                                 idx_start + n_mid, idx_end)
 
     cdef void query_one_(BallTree self,
                          ITYPE_t i_node,
@@ -1228,7 +1122,11 @@ cdef void sort_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
 # the python class hierarchy, so instead they take all relevant parameters
 # as arguments.
 cdef class BoundBase:
-    """base class for bound interface"""    
+    """base class for bound interface"""
+    cdef int init_node(self, BallTree bt, ITYPE_t i_node,
+                       ITYPE_t idx_start, ITYPE_t idx_end):
+        return 0
+
     cdef DTYPE_t min_dist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
         return 0.0
     
@@ -1236,10 +1134,10 @@ cdef class BoundBase:
         return 0.0
 
     cdef DTYPE_t max_dist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
-        return np.inf
+        return INF
 
     cdef DTYPE_t max_rdist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
-        return np.inf
+        return INF
 
     cdef DTYPE_t min_dist_dual(self, BallTree bt1, ITYPE_t i_node1,
                                BallTree bt2, ITYPE_t i_node2):
@@ -1251,14 +1149,62 @@ cdef class BoundBase:
 
     cdef DTYPE_t max_dist_dual(self, BallTree bt1, ITYPE_t i_node1,
                                BallTree bt2, ITYPE_t i_node2):
-        return np.inf
+        return INF
 
     cdef DTYPE_t max_rdist_dual(self, BallTree bt1, ITYPE_t i_node1,
                                 BallTree bt2, ITYPE_t i_node2):
-        return np.inf
+        return INF
 
 
 cdef class BallBound(BoundBase):
+    @cython.cdivision(True)
+    cdef int init_node(self, BallTree bt, ITYPE_t i_node,
+                       ITYPE_t idx_start, ITYPE_t idx_end):
+        cdef ITYPE_t n_features = bt.data.shape[1]
+        cdef ITYPE_t n_points = idx_end - idx_start
+
+        cdef ITYPE_t* idx_array = <ITYPE_t*> bt.idx_array.data
+        cdef DTYPE_t* data = <DTYPE_t*> bt.data.data
+        cdef NodeInfo* node_info = (<NodeInfo*> bt.node_info_arr.data + i_node)
+        cdef DTYPE_t* centroid = (<DTYPE_t*> bt.node_centroid_arr.data
+                                  + i_node * n_features)
+        cdef ITYPE_t i, j
+        cdef DTYPE_t radius
+        cdef DTYPE_t *this_pt
+
+        # set up node info
+        node_info.idx_start = idx_start
+        node_info.idx_end = idx_end
+
+        if 2 * i_node + 1 >= bt.n_nodes:
+            node_info.is_leaf = 1
+        elif idx_end - idx_start < 2:
+            node_info.is_leaf = 1
+        else:
+            node_info.is_leaf = 0
+
+        # determine Node centroid
+        for j from 0 <= j < n_features:
+            centroid[j] = 0
+
+        for i from idx_start <= i < idx_end:
+            this_pt = data + n_features * idx_array[i]
+            for j from 0 <= j < n_features:
+                centroid[j] += this_pt[j]
+
+        for j from 0 <= j < n_features:
+            centroid[j] /= n_points
+
+        # determine Node radius
+        radius = 0
+        for i from idx_start <= i < idx_end:
+            radius = fmax(radius,
+                          bt.rdist(centroid, data + n_features * idx_array[i]))
+
+        node_info.radius = bt.dm.reduced_to_dist(radius, &bt.dm.params)
+        
+        return node_info.is_leaf
+
     cdef DTYPE_t min_dist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
         cdef ITYPE_t n_features = bt.data.shape[1]
         cdef NodeInfo* info = <NodeInfo*> bt.node_info_arr.data
