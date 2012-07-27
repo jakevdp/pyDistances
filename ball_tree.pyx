@@ -440,8 +440,8 @@ cdef class BallTree(object):
         cdef np.ndarray bounds
         cdef ITYPE_t i
         cdef DTYPE_t* pt
-        cdef DTYPE_t* dist_ptr = <DTYPE_t*> distances.data
-        cdef ITYPE_t* idx_ptr = <ITYPE_t*> idx_array.data
+        cdef DTYPE_t* dist_ptr = <DTYPE_t*> np.PyArray_DATA(distances)
+        cdef ITYPE_t* idx_ptr = <ITYPE_t*> np.PyArray_DATA(idx_array)
         cdef DTYPE_t reduced_dist_LB
         
         # create heap/queue object for holding results
@@ -470,10 +470,10 @@ cdef class BallTree(object):
 
             self.query_dual_(0, other, 0, n_neighbors,
                              dist_ptr, idx_ptr, reduced_dist_LB,
-                             <DTYPE_t*> bounds.data)
+                             <DTYPE_t*> np.PyArray_DATA(bounds))
 
         else:
-            pt = <DTYPE_t*>Xarr.data
+            pt = <DTYPE_t*> np.PyArray_DATA(Xarr)
             for i in range(Xarr.shape[0]):
                 reduced_dist_LB = self.bound.min_rdist(self, 0, pt)
                 self.query_one_(0, pt, n_neighbors,
@@ -483,8 +483,8 @@ cdef class BallTree(object):
                 idx_ptr += n_neighbors
                 pt += n_features
 
-        dist_ptr = <DTYPE_t*> distances.data
-        idx_ptr = <ITYPE_t*> idx_array.data
+        dist_ptr = <DTYPE_t*> np.PyArray_DATA(distances)
+        idx_ptr = <ITYPE_t*> np.PyArray_DATA(idx_array)
         for i from 0 <= i < n_neighbors * n_queries:
             dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
                                                   &self.dm.params)
@@ -604,8 +604,8 @@ cdef class BallTree(object):
         cdef np.ndarray Xarr = X
         cdef np.ndarray rarr = r
 
-        cdef DTYPE_t* Xdata = <DTYPE_t*>Xarr.data
-        cdef DTYPE_t* rdata = <DTYPE_t*>rarr.data
+        cdef DTYPE_t* Xdata = <DTYPE_t*> np.PyArray_DATA(Xarr)
+        cdef DTYPE_t* rdata = <DTYPE_t*> np.PyArray_DATA(rarr)
 
         cdef ITYPE_t i
 
@@ -618,24 +618,24 @@ cdef class BallTree(object):
         idx_array_i = np.empty(self.data.shape[0], dtype=ITYPE)
         distances_i = np.empty(self.data.shape[0], dtype=DTYPE)
         count = np.zeros(X.shape[0], ITYPE)
-        cdef ITYPE_t* count_data = <ITYPE_t*> count.data
+        cdef ITYPE_t* count_data = <ITYPE_t*> np.PyArray_DATA(count)
 
         #TODO: avoid enumerate and repeated allocation of pt slice
         for i in range(Xarr.shape[0]):
             count_data[i] = self.query_radius_one_(
-                                               0,
-                                               Xdata + i * n_features,
-                                               rdata[i],
-                                               <ITYPE_t*>idx_array_i.data,
-                                               <DTYPE_t*>distances_i.data,
-                                               0, count_only, return_distance)
+                                      0,
+                                      Xdata + i * n_features,
+                                      rdata[i],
+                                      <ITYPE_t*> np.PyArray_DATA(idx_array_i),
+                                      <DTYPE_t*> np.PyArray_DATA(distances_i),
+                                      0, count_only, return_distance)
 
             if count_only:
                 pass
             else:
                 if sort_results:
-                    sort_dist_idx(<DTYPE_t*>distances_i.data,
-                                  <ITYPE_t*>idx_array_i.data,
+                    sort_dist_idx(<DTYPE_t*> np.PyArray_DATA(distances_i),
+                                  <ITYPE_t*> np.PyArray_DATA(idx_array_i),
                                   count_data[i])
 
                 idx_array[i] = idx_array_i[:count_data[i]].copy()
@@ -659,8 +659,9 @@ cdef class BallTree(object):
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef ITYPE_t n_points = idx_end - idx_start
         cdef ITYPE_t n_mid = n_points / 2
-        cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data + idx_start
-        cdef DTYPE_t* data = <DTYPE_t*> self.data.data
+        cdef ITYPE_t* idx_array = (<ITYPE_t*> np.PyArray_DATA(self.idx_array)
+                                   + idx_start)
+        cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
 
         # initialize node.
         leaf = self.bound.init_node(self, i_node, idx_start, idx_end)
@@ -687,8 +688,8 @@ cdef class BallTree(object):
                          DTYPE_t* near_set_dist,
                          ITYPE_t* near_set_indx,
                          DTYPE_t reduced_dist_LB):
-        cdef DTYPE_t* data = <DTYPE_t*> self.data.data
-        cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
+        cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
+        cdef ITYPE_t* idx_array = <ITYPE_t*> np.PyArray_DATA(self.idx_array)
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef NodeInfo* node_info = self.node_info(i_node)
 
@@ -743,16 +744,14 @@ cdef class BallTree(object):
                           DTYPE_t reduced_dist_LB,
                           DTYPE_t* bounds):
         cdef ITYPE_t n_features = self.data.shape[1]
-        cdef NodeInfo* node_info1 = (<NodeInfo*> self.node_info_arr.data
-                                     + i_node1)
-        cdef NodeInfo* node_info2 = (<NodeInfo*> other.node_info_arr.data
-                                     + i_node2)
+        cdef NodeInfo* node_info1 = self.node_info(i_node1)
+        cdef NodeInfo* node_info2 = self.node_info(i_node2)
         
-        cdef DTYPE_t* data1 = <DTYPE_t*> self.data.data
-        cdef DTYPE_t* data2 = <DTYPE_t*> other.data.data
+        cdef DTYPE_t* data1 = <DTYPE_t*> np.PyArray_DATA(self.data)
+        cdef DTYPE_t* data2 = <DTYPE_t*> np.PyArray_DATA(other.data)
 
-        cdef ITYPE_t* idx_array1 = <ITYPE_t*> self.idx_array.data
-        cdef ITYPE_t* idx_array2 = <ITYPE_t*> other.idx_array.data
+        cdef ITYPE_t* idx_array1 = <ITYPE_t*> np.PyArray_DATA(self.idx_array)
+        cdef ITYPE_t* idx_array2 = <ITYPE_t*> np.PyArray_DATA(other.idx_array)
 
         cdef DTYPE_t dist_pt, reduced_dist_LB1, reduced_dist_LB2
         cdef ITYPE_t i1, i2
@@ -882,8 +881,8 @@ cdef class BallTree(object):
                                    ITYPE_t idx_i,
                                    int count_only,
                                    int return_distance):
-        cdef DTYPE_t* data = <DTYPE_t*> self.data.data
-        cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
+        cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
+        cdef ITYPE_t* idx_array = <ITYPE_t*> np.PyArray_DATA(self.idx_array)
         cdef ITYPE_t n_features = self.data.shape[1]
 
         cdef NodeInfo* node_info = self.node_info(i_node)
@@ -958,10 +957,10 @@ cdef class BallTree(object):
                                      &self.dm.params, -1, -1)
 
     cdef NodeInfo* node_info(BallTree self, ITYPE_t i_node):
-        return (<NodeInfo*> self.node_info_arr.data) + i_node
+        return <NodeInfo*> np.PyArray_DATA(self.node_info_arr) + i_node
     
     cdef DTYPE_t* node_centroid(BallTree self, ITYPE_t i_node):
-        return (<DTYPE_t*> self.node_centroid_arr.data
+        return (<DTYPE_t*> np.PyArray_DATA(self.node_centroid_arr)
                 + i_node * self.data.shape[1])
 
 ######################################################################
@@ -1165,11 +1164,11 @@ cdef class BallBound(BoundBase):
         cdef ITYPE_t n_features = bt.data.shape[1]
         cdef ITYPE_t n_points = idx_end - idx_start
 
-        cdef ITYPE_t* idx_array = <ITYPE_t*> bt.idx_array.data
-        cdef DTYPE_t* data = <DTYPE_t*> bt.data.data
-        cdef NodeInfo* node_info = (<NodeInfo*> bt.node_info_arr.data + i_node)
-        cdef DTYPE_t* centroid = (<DTYPE_t*> bt.node_centroid_arr.data
-                                  + i_node * n_features)
+        cdef ITYPE_t* idx_array = <ITYPE_t*> np.PyArray_DATA(bt.idx_array)
+        cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(bt.data)
+        cdef NodeInfo* node_info = bt.node_info(i_node)
+        cdef DTYPE_t* centroid = bt.node_centroid(i_node)
+
         cdef ITYPE_t i, j
         cdef DTYPE_t radius
         cdef DTYPE_t *this_pt
@@ -1209,11 +1208,10 @@ cdef class BallBound(BoundBase):
 
     cdef DTYPE_t min_dist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
         cdef ITYPE_t n_features = bt.data.shape[1]
-        cdef NodeInfo* info = <NodeInfo*> bt.node_info_arr.data
-        cdef DTYPE_t* centroid = <DTYPE_t*> bt.node_centroid_arr.data
+        cdef NodeInfo* info = bt.node_info(i_node)
+        cdef DTYPE_t* centroid = bt.node_centroid(i_node)
 
-        return fmax(0, (bt.dist(pt, centroid + i_node * n_features)
-                        - info[i_node].radius))
+        return fmax(0, bt.dist(pt, centroid) - info.radius)
 
     cdef DTYPE_t min_rdist(self, BallTree bt, ITYPE_t i_node, DTYPE_t* pt):
         return bt.dm.dist_to_reduced(self.min_dist(bt, i_node, pt),
@@ -1222,14 +1220,14 @@ cdef class BallBound(BoundBase):
     cdef DTYPE_t min_dist_dual(self, BallTree bt1, ITYPE_t i_node1,
                                BallTree bt2, ITYPE_t i_node2):
         cdef ITYPE_t n_features = bt1.data.shape[1]
-        cdef NodeInfo* info1 = <NodeInfo*> bt1.node_info_arr.data
-        cdef NodeInfo* info2 = <NodeInfo*> bt2.node_info_arr.data
-        cdef DTYPE_t* centroid1 = <DTYPE_t*> bt1.node_centroid_arr.data
-        cdef DTYPE_t* centroid2 = <DTYPE_t*> bt2.node_centroid_arr.data
+        cdef NodeInfo* info1 = bt1.node_info(i_node1)
+        cdef NodeInfo* info2 = bt2.node_info(i_node2)
+        cdef DTYPE_t* centroid1 = bt1.node_centroid(i_node1)
+        cdef DTYPE_t* centroid2 = bt2.node_centroid(i_node2)
         
-        return fmax(0, (bt1.dist(centroid2 + i_node2 * n_features,
-                                 centroid1 + i_node1 * n_features)
-                        - info1[i_node1].radius - info2[i_node2].radius))
+        return fmax(0, (bt1.dist(centroid2, centroid1)
+                        - info1.radius
+                        - info2.radius))
 
     cdef DTYPE_t rdist_LB_dual(self, BallTree bt1, ITYPE_t i_node1,
                                BallTree bt2, ITYPE_t i_node2):
