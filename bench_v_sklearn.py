@@ -15,7 +15,7 @@ skBT = skBallTree(X, 30)
 t1 = time()
 print "sk construction: %.2g sec" % (t1 - t0)
 
-for k in 1, 2, 4, 8:
+for k in [1, 2, 4, 8]:
     print "query %i in [%i, %i]:" % (k, X.shape[0], X.shape[1])
 
     t0 = time()

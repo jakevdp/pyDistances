@@ -9,7 +9,7 @@ BT = BallTree(X, 30)
 t1 = time()
 print "construction: %.2g sec" % (t1 - t0)
 
-for k in 1, 2, 4, 8:
+for k in [1, 2, 4, 8]:
     for dual in (True, False):
         t0 = time()
         BT.query(X, k, dualtree=dual)

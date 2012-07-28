@@ -384,7 +384,9 @@ cdef class _BinaryTree(object):
         cdef np.ndarray bounds
         cdef ITYPE_t i
         cdef DTYPE_t* pt
+        #cdef DTYPE_t* dist_ptr = <DTYPE_t*> distances.data
         cdef DTYPE_t* dist_ptr = <DTYPE_t*> np.PyArray_DATA(distances)
+        #cdef ITYPE_t* idx_ptr = <ITYPE_t*> idx_array.data
         cdef ITYPE_t* idx_ptr = <ITYPE_t*> np.PyArray_DATA(idx_array)
         cdef DTYPE_t reduced_dist_LB
         
@@ -413,10 +415,12 @@ cdef class _BinaryTree(object):
 
             self.query_dual_(0, other, 0, n_neighbors,
                              dist_ptr, idx_ptr, reduced_dist_LB,
-                             <DTYPE_t*> np.PyArray_DATA(bounds))
+                             #<DTYPE_t*> bounds.data)
+                            <DTYPE_t*> np.PyArray_DATA(bounds))
 
         else:
             pt = <DTYPE_t*> np.PyArray_DATA(Xarr)
+            #pt = <DTYPE_t*> Xarr.data
             for i in range(Xarr.shape[0]):
                 reduced_dist_LB = self.bound.min_rdist(self, 0, pt)
                 self.query_one_(0, pt, n_neighbors,
@@ -428,6 +432,8 @@ cdef class _BinaryTree(object):
 
         dist_ptr = <DTYPE_t*> np.PyArray_DATA(distances)
         idx_ptr = <ITYPE_t*> np.PyArray_DATA(idx_array)
+        #dist_ptr = <DTYPE_t*> distances.data
+        #idx_ptr = <ITYPE_t*> idx_array.data
         for i from 0 <= i < n_neighbors * n_queries:
             dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
                                                   &self.dm.params)
@@ -549,6 +555,8 @@ cdef class _BinaryTree(object):
 
         cdef DTYPE_t* Xdata = <DTYPE_t*> np.PyArray_DATA(Xarr)
         cdef DTYPE_t* rdata = <DTYPE_t*> np.PyArray_DATA(rarr)
+        #cdef DTYPE_t* Xdata = <DTYPE_t*> Xarr.data
+        #cdef DTYPE_t* rdata = <DTYPE_t*> rarr.data
 
         cdef ITYPE_t i
 
@@ -562,6 +570,7 @@ cdef class _BinaryTree(object):
         distances_i = np.empty(self.data.shape[0], dtype=DTYPE)
         count = np.zeros(X.shape[0], ITYPE)
         cdef ITYPE_t* count_data = <ITYPE_t*> np.PyArray_DATA(count)
+        #cdef ITYPE_t* count_data = <ITYPE_t*> count.data
 
         #TODO: avoid enumerate and repeated allocation of pt slice
         for i in range(Xarr.shape[0]):
@@ -571,13 +580,17 @@ cdef class _BinaryTree(object):
                                       rdata[i],
                                       <ITYPE_t*> np.PyArray_DATA(idx_array_i),
                                       <DTYPE_t*> np.PyArray_DATA(distances_i),
+                                      #<ITYPE_t*> idx_array_i.data,
+                                      #<DTYPE_t*> distances_i.data,
                                       0, count_only, return_distance)
 
             if count_only:
                 pass
             else:
                 if sort_results:
-                    sort_dist_idx(<DTYPE_t*> np.PyArray_DATA(distances_i),
+                    sort_dist_idx(#<DTYPE_t*> distances_i.data,
+                                  #<ITYPE_t*> idx_array_i.data,
+                                  <DTYPE_t*> np.PyArray_DATA(distances_i),
                                   <ITYPE_t*> np.PyArray_DATA(idx_array_i),
                                   count_data[i])
 
@@ -604,6 +617,8 @@ cdef class _BinaryTree(object):
         cdef ITYPE_t* idx_array = (<ITYPE_t*> np.PyArray_DATA(self.idx_array)
                                    + idx_start)
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
+        #cdef ITYPE_t* idx_array = (<ITYPE_t*> self.idx_array.data + idx_start)
+        #cdef DTYPE_t* data = <DTYPE_t*> self.data.data
 
         # initialize node data
         cdef NodeInfo* node_info = self.bound.init_node(self, i_node,
@@ -653,6 +668,8 @@ cdef class _BinaryTree(object):
                          DTYPE_t reduced_dist_LB):
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
         cdef ITYPE_t* idx_array = <ITYPE_t*> np.PyArray_DATA(self.idx_array)
+        #cdef DTYPE_t* data = <DTYPE_t*> self.data.data
+        #cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
         cdef ITYPE_t n_features = self.data.shape[1]
         cdef NodeInfo* node_info = self.node_info(i_node)
 
@@ -712,9 +729,13 @@ cdef class _BinaryTree(object):
         cdef NodeInfo* node_info1 = self.node_info(i_node1)
         cdef NodeInfo* node_info2 = other.node_info(i_node2)
         
+        #cdef DTYPE_t* data1 = <DTYPE_t*> self.data.data
+        #cdef DTYPE_t* data2 = <DTYPE_t*> other.data.data
         cdef DTYPE_t* data1 = <DTYPE_t*> np.PyArray_DATA(self.data)
         cdef DTYPE_t* data2 = <DTYPE_t*> np.PyArray_DATA(other.data)
 
+        #cdef ITYPE_t* idx_array1 = <ITYPE_t*> self.idx_array.data
+        #cdef ITYPE_t* idx_array2 = <ITYPE_t*> other.idx_array.data
         cdef ITYPE_t* idx_array1 = <ITYPE_t*> np.PyArray_DATA(self.idx_array)
         cdef ITYPE_t* idx_array2 = <ITYPE_t*> np.PyArray_DATA(other.idx_array)
 
@@ -857,6 +878,8 @@ cdef class _BinaryTree(object):
                                    ITYPE_t count,
                                    int count_only,
                                    int return_distance):
+        #cdef DTYPE_t* data = <DTYPE_t*> self.data.data
+        #cdef ITYPE_t* idx_array = <ITYPE_t*> self.idx_array.data
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
         cdef ITYPE_t* idx_array = <ITYPE_t*> np.PyArray_DATA(self.idx_array)
         cdef ITYPE_t n_features = self.data.shape[1]
@@ -934,14 +957,19 @@ cdef class _BinaryTree(object):
 
     cdef NodeInfo* node_info(self, ITYPE_t i_node):
         return <NodeInfo*> np.PyArray_DATA(self.node_info_arr) + i_node
+        #return <NodeInfo*> self.node_info_arr.data + i_node
     
     cdef DTYPE_t* node_data1(self, ITYPE_t i_node):
         return (<DTYPE_t*> np.PyArray_DATA(self.node_data_arr1)
                 + i_node * self.node_data_arr1.shape[1])
+        #return (<DTYPE_t*> self.node_data_arr1.data
+        #        + i_node * self.node_data_arr1.shape[1])
 
     cdef DTYPE_t* node_data2(self, ITYPE_t i_node):
         return (<DTYPE_t*> np.PyArray_DATA(self.node_data_arr2)
                 + i_node * self.node_data_arr2.shape[1])
+        #return (<DTYPE_t*> self.node_data_arr2.data
+        #        + i_node * self.node_data_arr2.shape[1])
 
 cdef class BallTree(_BinaryTree):
     """
@@ -1222,6 +1250,8 @@ cdef class BallBound(BoundBase):
 
         cdef ITYPE_t* idx_array = <ITYPE_t*> np.PyArray_DATA(bt.idx_array)
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(bt.data)
+        #cdef ITYPE_t* idx_array = <ITYPE_t*> bt.idx_array.data
+        #cdef DTYPE_t* data = <DTYPE_t*> bt.data.data
         cdef NodeInfo* node_info = bt.node_info(i_node)
         cdef DTYPE_t* centroid = bt.node_data1(i_node)
 
@@ -1297,6 +1327,8 @@ cdef class KDBound(BoundBase):
         cdef ITYPE_t n_features = bt.data.shape[1]
         cdef ITYPE_t n_points = idx_end - idx_start
 
+        #cdef ITYPE_t* idx_array = <ITYPE_t*> bt.idx_array.data
+        #cdef DTYPE_t* data = <DTYPE_t*> bt.data.data
         cdef ITYPE_t* idx_array = <ITYPE_t*> np.PyArray_DATA(bt.idx_array)
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(bt.data)
         cdef NodeInfo* node_info = bt.node_info(i_node)
@@ -1333,10 +1365,13 @@ cdef class KDBound(BoundBase):
             d1 = pt[j] - lower[j]
             d2 = pt[j] - upper[j]
             d = fmin(d1 + fabs(d1), d2 + fabs(d2))
-            rdist += bt.dm.reduced_dfunc(&d, &zero, 1,
-                                         &bt.dm.params, -1, -1)
+            
+            rdist += d * d
+            #rdist += bt.dm.reduced_dfunc(&d, &zero, 1,
+            #                             &bt.dm.params, -1, -1)
 
-        rdist /= bt.dm.dist_to_reduced(2.0, &bt.dm.params)
+        rdist /= 4.
+        #rdist /= bt.dm.dist_to_reduced(2.0, &bt.dm.params)
 
     cdef DTYPE_t min_dist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
         return bt.dm.reduced_to_dist(self.min_rdist(bt, i_node, pt),
@@ -1361,10 +1396,12 @@ cdef class KDBound(BoundBase):
             d1 = upper1[j] - lower2[j]
             d2 = lower1[j] - upper2[j]
             d = fmin(d1 + fabs(d1), d2 + fabs(d2))
-            rdist += bt1.dm.reduced_dfunc(&d, &zero, 1,
-                                         &bt1.dm.params, -1, -1)
+            rdist += d * d
+            #rdist += bt1.dm.reduced_dfunc(&d, &zero, 1,
+            #                             &bt1.dm.params, -1, -1)
 
-        rdist /= bt1.dm.dist_to_reduced(2.0, &bt1.dm.params)
+        rdist /= 4.
+        #rdist /= bt1.dm.dist_to_reduced(2.0, &bt1.dm.params)
     
     cdef DTYPE_t min_dist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
                                _BinaryTree bt2, ITYPE_t i_node2):

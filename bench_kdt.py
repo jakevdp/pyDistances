@@ -1,8 +1,9 @@
 from time import time
 import numpy as np
 from ball_tree import BallTree, KDTree
+from sklearn import neighbors
 
-X = np.random.random((10000, 3))
+X = np.random.random((5000, 3))
 
 t0 = time()
 BT = BallTree(X, 30)
@@ -14,11 +15,13 @@ KDT = KDTree(X, 30)
 t1 = time()
 print "KDT construction: %.2g sec" % (t1 - t0)
 
+dual = False
+
 for k in 1, 2, 4, 8:
     t0 = time()
-    d1, i1 = BT.query(X, k, dualtree=True)
+    d1, i1 = BT.query(X, k, dualtree=dual)
     t1 = time()
-    d2, i2 = KDT.query(X, k, dualtree=True)
+    d2, i2 = KDT.query(X, k, dualtree=dual)
     t2 = time()
     print "query %i in [%i, %i]:" % (k, X.shape[0], X.shape[1])
     print "  BT: %.3g sec" % (t1 - t0)
