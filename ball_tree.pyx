@@ -11,7 +11,7 @@
 #
 #  - correlation function query
 #
-# Thoughts:
+# Other Thoughts:
 #  what about using fibonacci heaps to keep track of visited nodes?  This is
 #  fairly easy to try out with the HeapBase abstraction.
 
@@ -97,7 +97,7 @@ For a node with index ``i``, the two children are found at indices
 With this data structure in place, the functionality of the above BallTree
 pseudo-code can be implemented in a much more efficient manner.
 Most of the data passing done in this code uses raw data pointers.
-Using numpy arrays would be preferable for safety, but the
+Using numpy arrays would be preferable for indexing safety, but the
 overhead of array slicing and sub-array construction leads to execution
 time which is several orders of magnitude slower than the current
 implementation.
@@ -107,7 +107,7 @@ Priority Queue vs Max-heap
 When querying for more than one neighbor, the code must maintain a list of
 the current k nearest points.  The BallTree code implements this in two ways.
 
-- A priority queue: this is just a sorted list.  When an item is added,
+- A priority queue: this is simply a sorted list.  When an item is added,
   it is inserted in the appropriate location.  The cost of the search plus
   insert averages O[k].
 - A max-heap: this is a binary tree structure arranged such that each node is
@@ -121,10 +121,10 @@ the current k nearest points.  The BallTree code implements this in two ways.
 Each insert is performed an average of log(N) times per query, where N is
 the number of training points.  Because of this, for a single query, the
 priority-queue approach costs O[k log(N)], and the max-heap approach costs
-O[log(k)log(N)] + O[k log(k)].  Tests show that for sufficiently large k,
-the max-heap approach out-performs the priority queue approach by a factor
-of a few.  In light of these tests, the code uses a priority queue for
-k < 5, and a max-heap otherwise.
+O[log(k)log(N)] + O[k log(k)].  Empirical tests show that for sufficiently
+large k, the max-heap approach out-performs the priority queue approach by
+a factor of a few.  In light of these tests, the code uses a priority queue
+for k < 5, and a max-heap otherwise.
 
 Memory Allocation
 ~~~~~~~~~~~~~~~~~
@@ -140,18 +140,16 @@ For a given number of levels, the number of points in a tree is given by
 by induction.  Using them, the correct amount of memory can be pre-allocated
 for a given ``n_samples`` and ``leaf_size``.
 """
-
 import numpy as np
 
 cimport numpy as np
 cimport cython
-from libc cimport stdlib
-from libc.math cimport fmax, fmin
+from libc.math cimport fmax, fmin, fabs
 
 from distmetrics cimport DistanceMetric, DTYPE_t
 from distmetrics import DTYPE
 
-#from sklearn.utils import array2d
+# validation function ported from scikit-learn (sklearn.utils.array2d)
 def array2d(X, dtype=None, order=None):
     """Returns at least 2-d array with data from X"""
     return np.asarray(np.atleast_2d(X), dtype=dtype, order=order)
@@ -164,6 +162,7 @@ def array2d(X, dtype=None, order=None):
 ITYPE = np.int32
 ctypedef np.int32_t ITYPE_t
 
+# explicitly define infinity
 cdef DTYPE_t INF = np.inf
 
 ######################################################################
@@ -176,7 +175,7 @@ cdef struct NodeInfo:
     ITYPE_t idx_start
     ITYPE_t idx_end
     ITYPE_t is_leaf
-    DTYPE_t radius
+    DTYPE_t radius # radius is used for BallTree
 
 ######################################################################
 # newObj function
@@ -192,16 +191,16 @@ def newObj(obj):
 INVALID_METRICS = ['sqeuclidean', 'correlation', 'pminkowski',
                    'pwminkowski', 'sqseuclidean', 'sqmahalanobis']
 
-
 ######################################################################
-# BallTree class
-#
+# BinaryTree class.
+# This is a base class for tree-based N-point queries
 cdef class _BinaryTree(object):
     """Base class for KDTree and BallTree"""
     cdef readonly np.ndarray data
     cdef np.ndarray idx_array
-    cdef np.ndarray node_centroid_arr
     cdef np.ndarray node_info_arr
+    cdef np.ndarray node_data_arr1
+    cdef np.ndarray node_data_arr2
 
     cdef ITYPE_t leaf_size
     cdef ITYPE_t n_levels
@@ -218,7 +217,8 @@ cdef class _BinaryTree(object):
         """
         self.data = np.empty((0,0), dtype=DTYPE)
         self.idx_array = np.empty(0, dtype=ITYPE)
-        self.node_centroid_arr = np.empty((0,0), dtype=DTYPE)
+        self.node_data_arr1 = np.empty((0,0), dtype=DTYPE)
+        self.node_data_arr2 = np.empty((0,0), dtype=DTYPE)
         self.node_info_arr = np.empty(0, dtype='c')
         
         self.dm = DistanceMetric()
@@ -226,13 +226,11 @@ cdef class _BinaryTree(object):
         self.heap = HeapBase()
 
     def __init__(self, X, leaf_size=20, metric="minkowski", p=2, **kwargs):
-        self.bound = BoundBase()
-        self.init_common(X, leaf_size, metric, p=p, **kwargs)
-        raise ValueError("_BinaryTree is an abstract base class.  "
-                         "Use BallTree or KDTree.")
+        raise ValueError("_BinaryTree cannot be instantiated on its own")
 
-    def init_common(self, X, leaf_size=20, 
-                    metric="minkowski", p=2, **kwargs):
+    def __init_common(self, X, leaf_size=20, metric="minkowski", p=2,
+                      data1=True, data2=False, **kwargs):
+        """Common initialization steps"""
         self.data = np.asarray(X, dtype=DTYPE, order='C')
 
         if self.data.size == 0:
@@ -253,7 +251,7 @@ cdef class _BinaryTree(object):
             self.dm = DistanceMetric(metric, p=p, **kwargs)
             if self.dm.learn_params_from_data:
                 self.dm.set_params_from_data(self.data)
-            
+
         if metric in INVALID_METRICS:
             raise ValueError("metric %s does not satisfy the triangle "
                              "inequality: BallTree cannot be used")
@@ -262,16 +260,24 @@ cdef class _BinaryTree(object):
         cdef ITYPE_t n_features = self.data.shape[1]
 
         # determine number of levels in the tree, and from this
-        # the number of nodes in the tree
+        # the number of nodes in the tree.  This results in leaf nodes
+        # with numbers of points betweeen leaf_size and 2 * leaf_size
+        # (see module-level doc string for details)
         self.n_levels = np.log2(fmax(1, (n_samples - 1) / self.leaf_size)) + 1
         self.n_nodes = (2 ** self.n_levels) - 1
 
         # allocate arrays for storage
         self.idx_array = np.arange(n_samples, dtype=ITYPE)
-        self.node_centroid_arr = np.empty((self.n_nodes, n_features),
-                                          dtype=DTYPE, order='C')
         self.node_info_arr = np.empty(self.n_nodes * sizeof(NodeInfo),
                                       dtype='c', order='C')
+
+        if data1:
+            self.node_data_arr1 = np.empty((self.n_nodes, n_features),
+                                           dtype=DTYPE, order='C')
+        if data2:
+            self.node_data_arr2 = np.empty((self.n_nodes, n_features),
+                                           dtype=DTYPE, order='C')
+        
         self._recursive_build(0, 0, n_samples)
 
     def __reduce__(self):
@@ -282,7 +288,8 @@ cdef class _BinaryTree(object):
         """get state for pickling"""
         return (self.data,
                 self.idx_array,
-                self.node_centroid_arr,
+                self.node_data_arr1,
+                self.node_data_arr2,
                 self.node_info_arr,
                 self.leaf_size,
                 self.n_levels,
@@ -294,7 +301,8 @@ cdef class _BinaryTree(object):
         """set state for pickling"""
         (self.data,
          self.idx_array,
-         self.node_centroid_arr,
+         self.node_data_arr1,
+         self.node_data_arr2,
          self.node_info_arr,
          self.leaf_size,
          self.n_levels,
@@ -395,7 +403,7 @@ cdef class _BinaryTree(object):
                                    metric=self.dm,
                                    **self.dm.init_kwargs)
 
-            reduced_dist_LB = self.bound.min_dist_dual(self, 0, other, 0)
+            reduced_dist_LB = self.bound.min_rdist_dual(self, 0, other, 0)
 
             # bounds store the current furthest neighbor which is stored
             # in each node of the "other" tree.  This makes it so that we
@@ -597,11 +605,32 @@ cdef class _BinaryTree(object):
                                    + idx_start)
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(self.data)
 
-        # initialize node.
-        cdef int leaf = self.bound.init_node(self, i_node, idx_start, idx_end)
-        
-        if leaf:
-            pass
+        # initialize node data
+        cdef NodeInfo* node_info = self.bound.init_node(self, i_node,
+                                                        idx_start, idx_end)
+
+        # set up node info
+        node_info.idx_start = idx_start
+        node_info.idx_end = idx_end
+
+        if 2 * i_node + 1 >= self.n_nodes:
+            node_info.is_leaf = 1
+            if idx_end - idx_start > 2 * self.leaf_size:
+                # this shouldn't happen if our memory allocation is correct
+                # we'll proactively prevent memory errors, but raise a warning
+                # saying we're doing so.
+                import warnings
+                warnings.warn("Internal: memory layout is flawed: "
+                              "not enough nodes allocated")
+        elif idx_end - idx_start < 2:
+            # this shouldn't happen if our memory allocation is correct
+            # we'll proactively prevent memory errors, but raise a warning
+            # saying we're doing so.
+            import warnings
+            warnings.warn("Internal: memory layout is flawed: "
+                          "too many nodes allocated")
+            node_info.is_leaf = 1
+
         else:  # split node and recursively construct child nodes.
             # determine dimension on which to split
             i_max = find_split_dim(data, idx_array, n_features, n_points)
@@ -650,7 +679,7 @@ cdef class _BinaryTree(object):
 
         #------------------------------------------------------------
         # Case 3: Node is not a leaf.  Recursively query subnodes
-        #         starting with the one whose centroid is closest
+        #         starting with the closest
         else:
             i1 = 2 * i_node + 1
             i2 = i1 + 1
@@ -725,10 +754,10 @@ cdef class _BinaryTree(object):
         # Case 3a: node 1 is a leaf: split node 2 and recursively
         #          query, starting with the nearest node
         elif node_info1.is_leaf:
-            reduced_dist_LB1 = self.bound.min_dist_dual(self, i_node1,
-                                                        other, 2 * i_node2 + 1)
-            reduced_dist_LB2 = self.bound.min_dist_dual(self, i_node1,
-                                                        other, 2 * i_node2 + 2)
+            reduced_dist_LB1 = self.bound.min_rdist_dual(self, i_node1,
+                                                         other, 2 * i_node2 + 1)
+            reduced_dist_LB2 = self.bound.min_rdist_dual(self, i_node1,
+                                                         other, 2 * i_node2 + 2)
 
             if reduced_dist_LB1 < reduced_dist_LB2:
                 self.query_dual_(i_node1, other, 2 * i_node2 + 1, n_neighbors,
@@ -753,10 +782,10 @@ cdef class _BinaryTree(object):
         # Case 3b: node 2 is a leaf: split node 1 and recursively
         #          query, starting with the nearest node
         elif node_info2.is_leaf:
-            reduced_dist_LB1 = self.bound.min_dist_dual(self, 2 * i_node1 + 1,
-                                                        other, i_node2)
-            reduced_dist_LB2 = self.bound.min_dist_dual(self, 2 * i_node1 + 2,
-                                                        other, i_node2)
+            reduced_dist_LB1 = self.bound.min_rdist_dual(self, 2 * i_node1 + 1,
+                                                         other, i_node2)
+            reduced_dist_LB2 = self.bound.min_rdist_dual(self, 2 * i_node1 + 2,
+                                                         other, i_node2)
 
             if reduced_dist_LB1 < reduced_dist_LB2:
                 self.query_dual_(2 * i_node1 + 1, other, i_node2, n_neighbors,
@@ -777,10 +806,10 @@ cdef class _BinaryTree(object):
         # Case 4: neither node is a leaf:
         #         split both and recursively query all four pairs
         else:
-            reduced_dist_LB1 = self.bound.min_dist_dual(self, 2 * i_node1 + 1,
-                                                        other, 2 * i_node2 + 1)
-            reduced_dist_LB2 = self.bound.min_dist_dual(self, 2 * i_node1 + 2,
-                                                        other, 2 * i_node2 + 1)
+            reduced_dist_LB1 = self.bound.min_rdist_dual(self, 2 * i_node1 + 1,
+                                                         other, 2 * i_node2 + 1)
+            reduced_dist_LB2 = self.bound.min_rdist_dual(self, 2 * i_node1 + 2,
+                                                         other, 2 * i_node2 + 1)
 
             if reduced_dist_LB1 < reduced_dist_LB2:
                 self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 1,
@@ -797,10 +826,10 @@ cdef class _BinaryTree(object):
                                  n_neighbors, near_set_dist, near_set_indx,
                                  reduced_dist_LB1, bounds)
 
-            reduced_dist_LB1 = self.bound.min_dist_dual(self, 2 * i_node1 + 1,
-                                                        other, 2 * i_node2 + 2)
-            reduced_dist_LB2 = self.bound.min_dist_dual(self, 2 * i_node1 + 2,
-                                                        other, 2 * i_node2 + 2)
+            reduced_dist_LB1 = self.bound.min_rdist_dual(self, 2 * i_node1 + 1,
+                                                         other, 2 * i_node2 + 2)
+            reduced_dist_LB2 = self.bound.min_rdist_dual(self, 2 * i_node1 + 2,
+                                                         other, 2 * i_node2 + 2)
             if reduced_dist_LB1 < reduced_dist_LB2:
                 self.query_dual_(2 * i_node1 + 1, other, 2 * i_node2 + 2,
                                  n_neighbors, near_set_dist, near_set_indx,
@@ -906,9 +935,13 @@ cdef class _BinaryTree(object):
     cdef NodeInfo* node_info(self, ITYPE_t i_node):
         return <NodeInfo*> np.PyArray_DATA(self.node_info_arr) + i_node
     
-    cdef DTYPE_t* node_centroid(self, ITYPE_t i_node):
-        return (<DTYPE_t*> np.PyArray_DATA(self.node_centroid_arr)
-                + i_node * self.data.shape[1])
+    cdef DTYPE_t* node_data1(self, ITYPE_t i_node):
+        return (<DTYPE_t*> np.PyArray_DATA(self.node_data_arr1)
+                + i_node * self.node_data_arr1.shape[1])
+
+    cdef DTYPE_t* node_data2(self, ITYPE_t i_node):
+        return (<DTYPE_t*> np.PyArray_DATA(self.node_data_arr2)
+                + i_node * self.node_data_arr2.shape[1])
 
 cdef class BallTree(_BinaryTree):
     """
@@ -987,7 +1020,29 @@ cdef class BallTree(_BinaryTree):
     """
     def __init__(self, X, leaf_size=20, metric="minkowski", p=2, **kwargs):
         self.bound = BallBound()
-        self.init_common(X, leaf_size, metric, p=p, **kwargs)
+        # for BallTree, node_data_arr1 holds the centroid of each node
+        self.__init_common(X, leaf_size, metric, p=p,
+                           data1=True, data2=False,
+                           **kwargs)
+
+
+cdef class KDTree(_BinaryTree):
+    def __init__(self, X, leaf_size=20, metric='minkowski', p=2, **kwargs):
+        if isinstance(metric, DistanceMetric):
+            metric_str = metric.metric
+        else:
+            metric_str = metric
+
+        if metric_str not in ['minkowski', 'chebyshev', 'euclidean',
+                              'l1', 'l2', 'manhattan', 'cityblock']:
+            raise ValueError("metric %s not recognized by KDTree" % metric_str)
+
+        self.bound = KDBound()
+        # for KDTree, node_data_arr1 and node_data_arr2 respectively hold the
+        # lower bounds and upper bounds for each node
+        self.__init_common(X, leaf_size, metric=metric, p=p,
+                           data1=True, data2=True, **kwargs)
+
 
 ######################################################################
 # Helper functions for building and querying
@@ -1116,9 +1171,9 @@ cdef void sort_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
 # implemented as c structs with the associated fast access
 cdef class BoundBase:
     """base class for bound interface"""
-    cdef int init_node(self, _BinaryTree bt, ITYPE_t i_node,
-                       ITYPE_t idx_start, ITYPE_t idx_end):
-        return 0
+    cdef NodeInfo* init_node(self, _BinaryTree bt, ITYPE_t i_node,
+                             ITYPE_t idx_start, ITYPE_t idx_end):
+        return NULL
 
     def __reduce__(self):
         """reduce method used for pickling"""
@@ -1160,30 +1215,19 @@ cdef class BoundBase:
 
 cdef class BallBound(BoundBase):
     @cython.cdivision(True)
-    cdef int init_node(self, _BinaryTree bt, ITYPE_t i_node,
-                       ITYPE_t idx_start, ITYPE_t idx_end):
+    cdef NodeInfo* init_node(self, _BinaryTree bt, ITYPE_t i_node,
+                             ITYPE_t idx_start, ITYPE_t idx_end):
         cdef ITYPE_t n_features = bt.data.shape[1]
         cdef ITYPE_t n_points = idx_end - idx_start
 
         cdef ITYPE_t* idx_array = <ITYPE_t*> np.PyArray_DATA(bt.idx_array)
         cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(bt.data)
         cdef NodeInfo* node_info = bt.node_info(i_node)
-        cdef DTYPE_t* centroid = bt.node_centroid(i_node)
+        cdef DTYPE_t* centroid = bt.node_data1(i_node)
 
         cdef ITYPE_t i, j
         cdef DTYPE_t radius
         cdef DTYPE_t *this_pt
-
-        # set up node info
-        node_info.idx_start = idx_start
-        node_info.idx_end = idx_end
-
-        if 2 * i_node + 1 >= bt.n_nodes:
-            node_info.is_leaf = 1
-        elif idx_end - idx_start < 2:
-            node_info.is_leaf = 1
-        else:
-            node_info.is_leaf = 0
 
         # determine Node centroid
         for j from 0 <= j < n_features:
@@ -1205,12 +1249,12 @@ cdef class BallBound(BoundBase):
 
         node_info.radius = bt.dm.reduced_to_dist(radius, &bt.dm.params)
         
-        return node_info.is_leaf
+        return node_info
 
     cdef DTYPE_t min_dist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
         cdef ITYPE_t n_features = bt.data.shape[1]
         cdef NodeInfo* info = bt.node_info(i_node)
-        cdef DTYPE_t* centroid = bt.node_centroid(i_node)
+        cdef DTYPE_t* centroid = bt.node_data1(i_node)
 
         return fmax(0, bt.dist(pt, centroid) - info.radius)
 
@@ -1222,7 +1266,7 @@ cdef class BallBound(BoundBase):
                           DTYPE_t* dmin, DTYPE_t* dmax):
         cdef ITYPE_t n_features = bt.data.shape[1]
         cdef NodeInfo* info = bt.node_info(i_node)
-        cdef DTYPE_t* centroid = bt.node_centroid(i_node)
+        cdef DTYPE_t* centroid = bt.node_data1(i_node)
         cdef DTYPE_t dist_pt = bt.dist(pt, centroid)
 
         dmin[0] = fmax(0, dist_pt - info.radius)
@@ -1233,21 +1277,103 @@ cdef class BallBound(BoundBase):
         cdef ITYPE_t n_features = bt1.data.shape[1]
         cdef NodeInfo* info1 = bt1.node_info(i_node1)
         cdef NodeInfo* info2 = bt2.node_info(i_node2)
-        cdef DTYPE_t* centroid1 = bt1.node_centroid(i_node1)
-        cdef DTYPE_t* centroid2 = bt2.node_centroid(i_node2)
+        cdef DTYPE_t* centroid1 = bt1.node_data1(i_node1)
+        cdef DTYPE_t* centroid2 = bt2.node_data1(i_node2)
         
         return fmax(0, (bt1.dist(centroid2, centroid1)
                         - info1.radius
                         - info2.radius))
 
-    cdef DTYPE_t rdist_LB_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
-                               _BinaryTree bt2, ITYPE_t i_node2):
+    cdef DTYPE_t min_rdist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
+                                _BinaryTree bt2, ITYPE_t i_node2):
         return bt1.dm.dist_to_reduced(self.min_dist_dual(bt1, i_node1,
                                                          bt2, i_node2),
                                       &bt1.dm.params)
 
 cdef class KDBound(BoundBase):
-    pass
+    @cython.cdivision(True)
+    cdef NodeInfo* init_node(self, _BinaryTree bt, ITYPE_t i_node,
+                             ITYPE_t idx_start, ITYPE_t idx_end):
+        cdef ITYPE_t n_features = bt.data.shape[1]
+        cdef ITYPE_t n_points = idx_end - idx_start
+
+        cdef ITYPE_t* idx_array = <ITYPE_t*> np.PyArray_DATA(bt.idx_array)
+        cdef DTYPE_t* data = <DTYPE_t*> np.PyArray_DATA(bt.data)
+        cdef NodeInfo* node_info = bt.node_info(i_node)
+        cdef DTYPE_t* lower = bt.node_data1(i_node)
+        cdef DTYPE_t* upper = bt.node_data2(i_node)
+
+        cdef ITYPE_t i, j
+        cdef DTYPE_t *this_pt
+
+        # determine Node bounds
+        for j from 0 <= j < n_features:
+            lower[j] = INF
+            upper[j] = 0
+
+        for i from idx_start <= i < idx_end:
+            this_pt = data + n_features * idx_array[i]
+            for j from 0 <= j < n_features:
+                lower[j] = fmin(lower[j], this_pt[j])
+                upper[j] = fmax(upper[j], this_pt[j])
+
+        return node_info
+    
+    @cython.cdivision(True)
+    cdef DTYPE_t min_rdist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
+        cdef ITYPE_t n_features = bt.data.shape[1]
+        cdef DTYPE_t* lower = bt.node_data1(i_node)
+        cdef DTYPE_t* upper = bt.node_data2(i_node)
+
+        cdef DTYPE_t d, d1, d2, rdist=0.0
+        cdef DTYPE_t zero = 0.0
+        cdef ITYPE_t j
+
+        for j from 0 <= j < n_features:
+            d1 = pt[j] - lower[j]
+            d2 = pt[j] - upper[j]
+            d = fmin(d1 + fabs(d1), d2 + fabs(d2))
+            rdist += bt.dm.reduced_dfunc(&d, &zero, 1,
+                                         &bt.dm.params, -1, -1)
+
+        rdist /= bt.dm.dist_to_reduced(2.0, &bt.dm.params)
+
+    cdef DTYPE_t min_dist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
+        return bt.dm.reduced_to_dist(self.min_rdist(bt, i_node, pt),
+                                     &bt.dm.params)
+    
+    @cython.cdivision(True)
+    cdef DTYPE_t min_rdist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
+                                _BinaryTree bt2, ITYPE_t i_node2):
+        cdef ITYPE_t n_features = bt1.data.shape[1]
+
+        cdef DTYPE_t* lower1 = bt1.node_data1(i_node1)
+        cdef DTYPE_t* upper1 = bt1.node_data2(i_node1)
+
+        cdef DTYPE_t* lower2 = bt2.node_data1(i_node2)
+        cdef DTYPE_t* upper2 = bt2.node_data2(i_node2)
+
+        cdef DTYPE_t d, d1, d2, rdist=0.0
+        cdef DTYPE_t zero = 0.0
+        cdef ITYPE_t j
+
+        for j from 0 <= j < n_features:
+            d1 = upper1[j] - lower2[j]
+            d2 = lower1[j] - upper2[j]
+            d = fmin(d1 + fabs(d1), d2 + fabs(d2))
+            rdist += bt1.dm.reduced_dfunc(&d, &zero, 1,
+                                         &bt1.dm.params, -1, -1)
+
+        rdist /= bt1.dm.dist_to_reduced(2.0, &bt1.dm.params)
+    
+    cdef DTYPE_t min_dist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
+                               _BinaryTree bt2, ITYPE_t i_node2):
+        return bt1.dm.reduced_to_dist(self.min_rdist_dual(bt1, i_node1,
+                                                          bt2, i_node2),
+                                     &bt1.dm.params)
+
+        
+        
 
 ######################################################################
 # Heap implementations

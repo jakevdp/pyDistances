@@ -164,16 +164,19 @@ cdef class DistanceMetric(object):
             self.dfunc = &euclidean_distance
             self.dfunc_spde = &euclidean_distance_spde
             self.dfunc_spsp = &euclidean_distance_spsp
+            self.params.minkowski.p = 2
 
         elif metric in ("manhattan", "cityblock", "l1"):
             self.dfunc = &manhattan_distance
             self.dfunc_spde = &manhattan_distance_spde
             self.dfunc_spsp = &manhattan_distance_spsp
+            self.params.minkowski.p = 1
 
         elif metric == "chebyshev":
             self.dfunc = &chebyshev_distance
             self.dfunc_spde = &chebyshev_distance_spde
             self.dfunc_spsp = &chebyshev_distance_spsp
+            self.params.minkowski.p = np.inf
 
         elif metric == "minkowski":
             if p == None:
@@ -201,7 +204,8 @@ cdef class DistanceMetric(object):
                 self.dfunc = &minkowski_distance
                 self.dfunc_spde = &minkowski_distance_spde
                 self.dfunc_spsp = &minkowski_distance_spsp
-                self.params.minkowski.p = p
+            
+            self.params.minkowski.p = p
 
         elif metric == "pminkowski":
             if p == None:
@@ -229,7 +233,8 @@ cdef class DistanceMetric(object):
                 self.dfunc = &pminkowski_distance
                 self.dfunc_spde = &pminkowski_distance_spde
                 self.dfunc_spsp = &pminkowski_distance_spsp
-                self.params.minkowski.p = p
+            
+            self.params.minkowski.p = p
 
         elif metric == "wminkowski":
             self.dfunc = &wminkowski_distance
