@@ -33,3 +33,19 @@ TODO
 Search TODO within distmetrics.pyx to see a list.  One big one (which should
 be straightforward) is to make the distance metrics work with CSR matrices.
 This will involve writing an alternate version of each core distance function.
+
+memview_bench
+-------------
+Been playing around: here's what I learned: 
+- memviews are good, as long as you're not using lots of very small slices
+- for problems with small dimension (I was using 3), inlining the distance
+  function can lead to improvements on order ~50-60%.  This doesn't bode
+  well for any flexible distance metric option, as far as I can tell. C++
+  is superior here, because templating and in-lining both happen at compile
+  time.  I'm not sure there's a way around this for python, other than HUGE
+  amounts of code duplication.
+- I think I should rewrite BallTree without any fancy options, using good
+  memory practices, and explicit functions which can be inlined at compilation.
+  This will not lead to clean code, but will lead to the fastest possible
+  execution times.  I could then have a modified version with all the extra
+  options.
