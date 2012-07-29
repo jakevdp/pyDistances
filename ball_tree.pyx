@@ -7,7 +7,7 @@
 #  - currently all metrics are used without precomputed values.
 #    Allowing precomputed values could speed computation with some metrics.
 #
-#  - add KDBound (and perhaps periodic boundary conditions)
+#  - KDBound: doesn't work for chebyshev
 #
 #  - correlation function query
 #
@@ -210,16 +210,27 @@ cdef class _BinaryTree(object):
     cdef BoundBase bound
     cdef HeapBase heap
 
+    cdef int n_trims
+    cdef int n_leaves
+    cdef int n_splits
+
+    def get_stats(self):
+        return (self.n_trims, self.n_leaves, self.n_splits)
+
+    def get_arrays(self):
+        return (self.data, self.idx_array,
+                self.node_data_arr1, self.node_data_arr2)
+
     def __cinit__(self):
         """
         initialize all arrays to empty.  This will prevent memory errors
         in rare cases where __init__ is not called
         """
-        self.data = np.empty((0,0), dtype=DTYPE)
-        self.idx_array = np.empty(0, dtype=ITYPE)
-        self.node_data_arr1 = np.empty((0,0), dtype=DTYPE)
-        self.node_data_arr2 = np.empty((0,0), dtype=DTYPE)
-        self.node_info_arr = np.empty(0, dtype='c')
+        self.data = np.zeros((0,0), dtype=DTYPE)
+        self.idx_array = np.zeros(0, dtype=ITYPE)
+        self.node_data_arr1 = np.zeros((0,0), dtype=DTYPE)
+        self.node_data_arr2 = np.zeros((0,0), dtype=DTYPE)
+        self.node_info_arr = np.zeros(0, dtype='c')
         
         self.dm = DistanceMetric()
         self.bound = BoundBase()
@@ -228,8 +239,14 @@ cdef class _BinaryTree(object):
     def __init__(self, X, leaf_size=20, metric="minkowski", p=2, **kwargs):
         raise ValueError("_BinaryTree cannot be instantiated on its own")
 
-    def __init_common(self, X, leaf_size=20, metric="minkowski", p=2,
-                      data1=True, data2=False, **kwargs):
+    def __init_metric(self, metric, **kwargs):
+        if isinstance(metric, DistanceMetric):
+            self.dm = metric
+            metric = self.dm.metric
+        else:
+            self.dm = DistanceMetric(metric, **kwargs)
+
+    def __init_common(self, X, leaf_size=20, data1=True, data2=False):
         """Common initialization steps"""
         self.data = np.asarray(X, dtype=DTYPE, order='C')
 
@@ -242,22 +259,13 @@ cdef class _BinaryTree(object):
         if leaf_size < 1:
             raise ValueError("leaf_size must be greater than or equal to 1")
         self.leaf_size = leaf_size
-
-        # set up dist_metric
-        if isinstance(metric, DistanceMetric):
-            dm = metric
-            metric = dm.metric
-        else:
-            self.dm = DistanceMetric(metric, p=p, **kwargs)
-            if self.dm.learn_params_from_data:
-                self.dm.set_params_from_data(self.data)
-
-        if metric in INVALID_METRICS:
-            raise ValueError("metric %s does not satisfy the triangle "
-                             "inequality: BallTree cannot be used")
         
         cdef ITYPE_t n_samples = self.data.shape[0]
         cdef ITYPE_t n_features = self.data.shape[1]
+
+        # set up dist_metric
+        if self.dm.learn_params_from_data:
+            self.dm.set_params_from_data(self.data)
 
         # determine number of levels in the tree, and from this
         # the number of nodes in the tree.  This results in leaf nodes
@@ -268,14 +276,14 @@ cdef class _BinaryTree(object):
 
         # allocate arrays for storage
         self.idx_array = np.arange(n_samples, dtype=ITYPE)
-        self.node_info_arr = np.empty(self.n_nodes * sizeof(NodeInfo),
+        self.node_info_arr = np.zeros(self.n_nodes * sizeof(NodeInfo),
                                       dtype='c', order='C')
 
         if data1:
-            self.node_data_arr1 = np.empty((self.n_nodes, n_features),
+            self.node_data_arr1 = np.zeros((self.n_nodes, n_features),
                                            dtype=DTYPE, order='C')
         if data2:
-            self.node_data_arr2 = np.empty((self.n_nodes, n_features),
+            self.node_data_arr2 = np.zeros((self.n_nodes, n_features),
                                            dtype=DTYPE, order='C')
         
         self._recursive_build(0, 0, n_samples)
@@ -372,7 +380,7 @@ cdef class _BinaryTree(object):
         cdef ITYPE_t n_queries = X.shape[0]
 
         # allocate distances and indices for return
-        cdef np.ndarray distances = np.empty((X.shape[0], n_neighbors),
+        cdef np.ndarray distances = np.zeros((X.shape[0], n_neighbors),
                                              dtype=DTYPE)
         distances.fill(INF)
 
@@ -398,6 +406,10 @@ cdef class _BinaryTree(object):
         else:
             self.heap = PriorityQueue()
         self.heap.init(dist_ptr, idx_ptr, n_neighbors)
+
+        self.n_trims = 0
+        self.n_leaves = 0
+        self.n_splits = 0
 
         if dualtree:
             # build a tree on query data with the same metric as self
@@ -434,11 +446,11 @@ cdef class _BinaryTree(object):
         idx_ptr = <ITYPE_t*> np.PyArray_DATA(idx_array)
         #dist_ptr = <DTYPE_t*> distances.data
         #idx_ptr = <ITYPE_t*> idx_array.data
-        for i from 0 <= i < n_neighbors * n_queries:
+        for i in range(n_neighbors * n_queries):
             dist_ptr[i] = self.dm.reduced_to_dist(dist_ptr[i],
                                                   &self.dm.params)
         if self.heap.needs_final_sort():
-            for i from 0 <= i < n_queries:
+            for i in range(n_queries):
                 sort_dist_idx(dist_ptr, idx_ptr, n_neighbors)
                 dist_ptr += n_neighbors
                 idx_ptr += n_neighbors
@@ -562,12 +574,12 @@ cdef class _BinaryTree(object):
 
         # prepare variables for iteration
         if not count_only:
-            idx_array = np.empty(X.shape[0], dtype='object')
+            idx_array = np.zeros(X.shape[0], dtype='object')
             if return_distance:
-                distances = np.empty(X.shape[0], dtype='object')
+                distances = np.zeros(X.shape[0], dtype='object')
 
-        idx_array_i = np.empty(self.data.shape[0], dtype=ITYPE)
-        distances_i = np.empty(self.data.shape[0], dtype=DTYPE)
+        idx_array_i = np.zeros(self.data.shape[0], dtype=ITYPE)
+        distances_i = np.zeros(self.data.shape[0], dtype=DTYPE)
         count = np.zeros(X.shape[0], ITYPE)
         cdef ITYPE_t* count_data = <ITYPE_t*> np.PyArray_DATA(count)
         #cdef ITYPE_t* count_data = <ITYPE_t*> count.data
@@ -648,6 +660,8 @@ cdef class _BinaryTree(object):
 
         else:  # split node and recursively construct child nodes.
             # determine dimension on which to split
+            node_info.is_leaf = 0
+
             i_max = find_split_dim(data, idx_array, n_features, n_points)
 
             # partition indices along this dimension
@@ -683,12 +697,13 @@ cdef class _BinaryTree(object):
         # Case 1: query point is outside node radius:
         #         trim it from the query
         if reduced_dist_LB > self.heap.largest():
-            pass
+            self.n_trims += 1
 
         #------------------------------------------------------------
         # Case 2: this is a leaf node.  Update set of nearby points
         elif node_info.is_leaf:
-            for i from node_info.idx_start <= i < node_info.idx_end:
+            self.n_leaves += 1
+            for i in range(node_info.idx_start, node_info.idx_end):
                 dist_pt = self.rdist(pt, data + n_features * idx_array[i])
 
                 if dist_pt < self.heap.largest():
@@ -698,6 +713,7 @@ cdef class _BinaryTree(object):
         # Case 3: Node is not a leaf.  Recursively query subnodes
         #         starting with the closest
         else:
+            self.n_splits += 1
             i1 = 2 * i_node + 1
             i2 = i1 + 1
             reduced_dist_LB_1 = self.bound.min_rdist(self, i1, pt)
@@ -754,7 +770,7 @@ cdef class _BinaryTree(object):
         elif node_info1.is_leaf and node_info2.is_leaf:
             bounds[i_node2] = -1
 
-            for i2 from node_info2.idx_start <= i2 < node_info2.idx_end:
+            for i2 in range(node_info2.idx_start, node_info2.idx_end):
                 self.heap.init(near_set_dist + idx_array2[i2] * n_neighbors,
                                near_set_indx + idx_array2[i2] * n_neighbors,
                                n_neighbors)
@@ -762,7 +778,7 @@ cdef class _BinaryTree(object):
                 if self.heap.largest() <= reduced_dist_LB:
                     continue
 
-                for i1 from node_info1.idx_start <= i1 < node_info1.idx_end:
+                for i1 in range(node_info1.idx_start, node_info1.idx_end):
                     dist_pt = self.rdist(data1 + n_features * idx_array1[i1],
                                          data2 + n_features * idx_array2[i2])
                     if dist_pt < self.heap.largest():
@@ -905,7 +921,7 @@ cdef class _BinaryTree(object):
             if count_only:
                 count += (node_info.idx_end - node_info.idx_start)
             else:
-                for i from node_info.idx_start <= i < node_info.idx_end:
+                for i in range(node_info.idx_start, node_info.idx_end):
                     if (count < 0) or (count >= self.data.shape[0]):
                         raise ValueError("count too big")
                     indices[count] = idx_array[i]
@@ -920,7 +936,7 @@ cdef class _BinaryTree(object):
         elif node_info.is_leaf:
             reduced_r = self.dm.dist_to_reduced(r, &self.dm.params)
 
-            for i from node_info.idx_start <= i < node_info.idx_end:
+            for i in range(node_info.idx_start, node_info.idx_end):
                 dist_pt = self.rdist(pt, (data + n_features
                                           * idx_array[i]))
                 if dist_pt <= reduced_r:
@@ -1047,29 +1063,34 @@ cdef class BallTree(_BinaryTree):
         # [ 0.          0.19662693  0.29473397]
     """
     def __init__(self, X, leaf_size=20, metric="minkowski", p=2, **kwargs):
+        self.__init_metric(metric, p=p, **kwargs)
         self.bound = BallBound()
+
+        # check that the metric is valid
+        if self.dm.metric in INVALID_METRICS:
+            raise ValueError("metric %s does not satisfy the triangle "
+                             "inequality: BallTree cannot be used")
+
         # for BallTree, node_data_arr1 holds the centroid of each node
-        self.__init_common(X, leaf_size, metric, p=p,
-                           data1=True, data2=False,
-                           **kwargs)
+        self.__init_common(X, leaf_size,data1=True, data2=False)
 
 
 cdef class KDTree(_BinaryTree):
     def __init__(self, X, leaf_size=20, metric='minkowski', p=2, **kwargs):
-        if isinstance(metric, DistanceMetric):
-            metric_str = metric.metric
-        else:
-            metric_str = metric
-
-        if metric_str not in ['minkowski', 'chebyshev', 'euclidean',
-                              'l1', 'l2', 'manhattan', 'cityblock']:
-            raise ValueError("metric %s not recognized by KDTree" % metric_str)
-
+        self.__init_metric(metric, p=p, **kwargs)
         self.bound = KDBound()
+
+        if self.dm.metric not in ['minkowski', 'euclidean', 'l1', 'l2',
+                                  'manhattan', 'cityblock']:
+            raise ValueError("metric %s not recognized by KDTree" % metric)
+
+        if self.dm.params.minkowski.p == INF:
+            raise ValueError('Chebyshev metric (p = inf) not '
+                             'supported by KDTree.  Use BallTree instead')
+
         # for KDTree, node_data_arr1 and node_data_arr2 respectively hold the
         # lower bounds and upper bounds for each node
-        self.__init_common(X, leaf_size, metric=metric, p=p,
-                           data1=True, data2=True, **kwargs)
+        self.__init_common(X, leaf_size, data1=True, data2=True)
 
 
 ######################################################################
@@ -1087,10 +1108,10 @@ cdef ITYPE_t find_split_dim(DTYPE_t* data,
     j_max = 0
     max_spread = 0
 
-    for j from 0 <= j < n_features:
+    for j in range(n_features):
         max_val = data[node_indices[0] * n_features + j]
         min_val = max_val
-        for i from 1 <= i < n_points:
+        for i in range(1, n_points):
             val = data[node_indices[i] * n_features + j]
             max_val = fmax(max_val, val)
             min_val = fmin(min_val, val)
@@ -1136,7 +1157,7 @@ cdef void partition_indices(DTYPE_t* data,
 
     while True:
         midindex = left
-        for i from left <= i < right:
+        for i in range(left, right):
             d1 = data[node_indices[i] * n_features + split_dim]
             d2 = data[node_indices[right] * n_features + split_dim]
             if d1 < d2:
@@ -1167,7 +1188,7 @@ cdef void sort_dist_idx(DTYPE_t* dist, ITYPE_t* idx, ITYPE_t k):
         dswap(dist, pivot_idx, k - 1)
         iswap(idx, pivot_idx, k - 1)
 
-        for i from 0 <= i < k - 1:
+        for i in range(k - 1):
             if dist[i] < pivot_val:
                 dswap(dist, i, store_idx)
                 iswap(idx, i, store_idx)
@@ -1260,20 +1281,20 @@ cdef class BallBound(BoundBase):
         cdef DTYPE_t *this_pt
 
         # determine Node centroid
-        for j from 0 <= j < n_features:
+        for j in range(n_features):
             centroid[j] = 0
 
-        for i from idx_start <= i < idx_end:
+        for i in range(idx_start, idx_end):
             this_pt = data + n_features * idx_array[i]
             for j from 0 <= j < n_features:
                 centroid[j] += this_pt[j]
 
-        for j from 0 <= j < n_features:
+        for j in range(n_features):
             centroid[j] /= n_points
 
         # determine Node radius
         radius = 0
-        for i from idx_start <= i < idx_end:
+        for i in range(idx_start, idx_end):
             radius = fmax(radius,
                           bt.rdist(centroid, data + n_features * idx_array[i]))
 
@@ -1339,13 +1360,13 @@ cdef class KDBound(BoundBase):
         cdef DTYPE_t *this_pt
 
         # determine Node bounds
-        for j from 0 <= j < n_features:
+        for j in range(n_features):
             lower[j] = INF
-            upper[j] = 0
+            upper[j] = -INF
 
-        for i from idx_start <= i < idx_end:
+        for i in range(idx_start, idx_end):
             this_pt = data + n_features * idx_array[i]
-            for j from 0 <= j < n_features:
+            for j in range(n_features):
                 lower[j] = fmin(lower[j], this_pt[j])
                 upper[j] = fmax(upper[j], this_pt[j])
 
@@ -1357,21 +1378,20 @@ cdef class KDBound(BoundBase):
         cdef DTYPE_t* lower = bt.node_data1(i_node)
         cdef DTYPE_t* upper = bt.node_data2(i_node)
 
-        cdef DTYPE_t d, d1, d2, rdist=0.0
-        cdef DTYPE_t zero = 0.0
+        cdef DTYPE_t d, d_lo, d_hi, rdist=0.0
         cdef ITYPE_t j
 
-        for j from 0 <= j < n_features:
-            d1 = pt[j] - lower[j]
-            d2 = pt[j] - upper[j]
-            d = fmin(d1 + fabs(d1), d2 + fabs(d2))
+        # here we'll use the fact that x + abs(x) = 2 * max(x, 0)
+        for j in range(n_features):
+            d_lo = lower[j] - pt[j]
+            d_hi = pt[j] - upper[j]
+            d = (d_lo + fabs(d_lo)) + (d_hi + fabs(d_hi))
             
-            rdist += d * d
-            #rdist += bt.dm.reduced_dfunc(&d, &zero, 1,
-            #                             &bt.dm.params, -1, -1)
+            #rdist += d ^ p
+            rdist += bt.dm.dist_to_reduced(d, &bt.dm.params)
 
-        rdist /= 4.
-        #rdist /= bt.dm.dist_to_reduced(2.0, &bt.dm.params)
+        #rdist /= 2 ^ p
+        return rdist / bt.dm.dist_to_reduced(2.0, &bt.dm.params)
 
     cdef DTYPE_t min_dist(self, _BinaryTree bt, ITYPE_t i_node, DTYPE_t* pt):
         return bt.dm.reduced_to_dist(self.min_rdist(bt, i_node, pt),
@@ -1392,16 +1412,17 @@ cdef class KDBound(BoundBase):
         cdef DTYPE_t zero = 0.0
         cdef ITYPE_t j
 
-        for j from 0 <= j < n_features:
-            d1 = upper1[j] - lower2[j]
-            d2 = lower1[j] - upper2[j]
-            d = fmin(d1 + fabs(d1), d2 + fabs(d2))
-            rdist += d * d
-            #rdist += bt1.dm.reduced_dfunc(&d, &zero, 1,
-            #                             &bt1.dm.params, -1, -1)
+        # here we'll use the fact that x + abs(x) = 2 * max(x, 0)
+        for j in range(n_features):
+            d1 = lower1[j] - upper2[j]
+            d2 = lower2[j] - upper1[j]
+            d = (d1 + fabs(d1)) + (d2 + fabs(d2))
+            
+            #rdist += d ^ p
+            rdist += bt1.dm.dist_to_reduced(d, &bt1.dm.params)
 
-        rdist /= 4.
-        #rdist /= bt1.dm.dist_to_reduced(2.0, &bt1.dm.params)
+        #rdist /= 2 ^ p
+        return rdist / bt1.dm.dist_to_reduced(2.0, &bt1.dm.params)
     
     cdef DTYPE_t min_dist_dual(self, _BinaryTree bt1, ITYPE_t i_node1,
                                _BinaryTree bt2, ITYPE_t i_node2):
