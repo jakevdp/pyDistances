@@ -2,7 +2,7 @@ import itertools
 from time import time
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
-from distmetrics import DistanceMetric
+from pyDistances.distmetrics import DistanceMetric
 
 
 

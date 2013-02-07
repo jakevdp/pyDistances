@@ -10,7 +10,7 @@ For consistency, it uses the same DistanceMetric object as the cython
 BallTree in order to enable the use of arbitrary distance metrics.
 """
 import numpy as np
-from distmetrics import DistanceMetric
+from pyDistances.distmetrics import DistanceMetric
 
 class SlowBallTree:
     def __init__(self, X, leaf_size=20, metric='euclidean', **kwargs):
@@ -18,7 +18,7 @@ class SlowBallTree:
         self.leaf_size = leaf_size
         self.metric = metric
         self.kwargs = kwargs
-        
+
         # create the distance metric
         self.dm = DistanceMetric(metric, **kwargs)
 
@@ -38,7 +38,7 @@ class SlowBallTree:
         if X.ndim == 1:
             X = X[np.newaxis, :]
         N = X.shape[0]
-        
+
         if X.ndim != 2 or X.shape[1] != self.X.shape[1]:
             raise ValueError("last dimension of X must match "
                              "dimension of the tree.")
@@ -81,7 +81,7 @@ class Node:
         Xind = self.X[self.indices]
         self.centroid = Xind.mean(0)
         self.radius = self.dm.cdist([self.centroid], Xind)[0].max()
-        
+
         if len(self.indices) > self.leaf_size:
             self.is_leaf = False
 
@@ -190,7 +190,7 @@ class Node:
 if __name__ == '__main__':
     from ball_tree import BallTree
     from time import time
-    
+
     rseed = np.random.randint(100000)
     print "rseed = %i" % rseed
     np.random.seed(rseed)

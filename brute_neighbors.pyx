@@ -1,8 +1,8 @@
 cimport numpy as np
 import numpy as np
 
-from distmetrics cimport DistanceMetric
-from distmetrics import DTYPE
+from pyDistances.distmetrics cimport DistanceMetric
+from pyDistances.distmetrics import DTYPE
 
 def brute_force_neighbors(X, Y, k, metric='euclidean', **kwargs):
     """

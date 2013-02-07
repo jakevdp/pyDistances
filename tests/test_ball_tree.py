@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.testing import assert_array_almost_equal
-from ball_tree import BallTree
-from distmetrics import DistanceMetric
+from pyDistances.ball_tree import BallTree
+from pyDistances.distmetrics import DistanceMetric
 
 from scipy.spatial import cKDTree
 from sklearn import neighbors
@@ -20,7 +20,7 @@ class TestBallTree:
         self.Y = np.random.random((n_samples, n_features))
         self.Xbool = (np.random.random(size=(10, 10)) >= 0.5).astype(float)
         self.Ybool = (np.random.random(size=(10, 10)) >= 0.5).astype(float)
-        
+
         VI = np.random.random((n_features, n_features))
         VI1 = np.dot(VI, VI.T)
         VI2 = np.dot(VI.T, VI)
@@ -90,8 +90,8 @@ class TestBallTree:
         # nearest neighbor, then the test may fail.  Distances will reflect
         # whether the search was successful
         assert_array_almost_equal(dist_bt, dist_dm)
-    
-    def test_metrics_float(self, k=5):    
+
+    def test_metrics_float(self, k=5):
         for (metric, argdict) in self.metrics.iteritems():
             keys = argdict.keys()
             for vals in itertools.product(*argdict.values()):
@@ -107,13 +107,13 @@ class TestBallTree:
 
         ind_dm = np.argsort(D, 1)[:, :k]
         dist_dm = D[np.arange(self.Ybool.shape[0])[:, None], ind_dm]
-        
+
         # we don't check the indices here because there are very often
         # ties for nearest neighbors, which cause the test to fail.
         # Distances will be correct in either case.
         assert_array_almost_equal(dist_bt, dist_dm)
 
-    def test_ball_tree_metrics_bool(self, k=3):    
+    def test_ball_tree_metrics_bool(self, k=3):
         for (metric, argdict) in self.bool_metrics.iteritems():
             keys = argdict.keys()
             for vals in itertools.product(*argdict.values()):
@@ -163,7 +163,7 @@ class TestBallTree:
 
         ind = np.concatenate(map(np.sort, ind))
         ind2 = ind2[D <= r]
-        
+
         assert_array_almost_equal(ind, ind2)
 
     def _check_query_radius_distance(self, X, bt, query_pt,
@@ -201,7 +201,7 @@ class TestBallTree:
         ind2, dist2 = bt2.query(self.X)
         assert np.all(ind1 == ind2)
         assert_array_almost_equal(dist1, dist2)
-        
+
 
     def test_pickle(self):
         bt1 = BallTree(self.X, leaf_size=1)
