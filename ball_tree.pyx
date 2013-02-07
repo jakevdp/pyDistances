@@ -146,8 +146,8 @@ cimport numpy as np
 cimport cython
 from libc.math cimport fmax, fmin, fabs
 
-from distmetrics cimport DistanceMetric, DTYPE_t
-from distmetrics import DTYPE
+from pyDistances.distmetrics cimport DistanceMetric, DTYPE_t
+from pyDistances.distmetrics import DTYPE
 
 # validation function ported from scikit-learn (sklearn.utils.array2d)
 def array2d(X, dtype=None, order=None):

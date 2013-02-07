@@ -5,7 +5,7 @@ from numpy.testing import assert_array_almost_equal
 
 from scipy.spatial.distance import cdist, pdist, squareform
 from scipy.sparse import csr_matrix
-from distmetrics import DistanceMetric
+from pyDistances.distmetrics import DistanceMetric
 
 def user_metric(x, y):
     return np.sum(abs(x - y) ** 3)
@@ -28,7 +28,7 @@ class TestMetrics:
 
         self.spX1 = csr_matrix(self.X1)
         self.spX2 = csr_matrix(self.X2)
-        
+
         VI = np.random.random((d, d))
         VI = np.dot(VI, VI.T)
 
@@ -87,7 +87,7 @@ class TestMetrics:
                 for X1 in self.X1, self.spX1:
                     for X2 in self.X2, self.spX2:
                         yield self.check_cdist, rmetric, X1, X2, dm, D_true
-            
+
     def check_cdist(self, metric, X1, X2, dm, D_true):
         D12 = dm.cdist(X1, X2)
         assert_array_almost_equal(D12, D_true, 6,
@@ -134,9 +134,9 @@ class TestMetrics:
                                   "Mismatch for pdist square=%s, "
                                   "metric=%s, X=%s"
                                   % (squareform, metric, X.__class__.__name__))
-        
 
-        
+
+
 if __name__ == '__main__':
     import nose
     nose.runmodule()
