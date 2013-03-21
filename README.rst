@@ -1,3 +1,7 @@
+**Note: this module should be considered unsupported.  It probably won't compile,
+and if it does, it may contain errors in some cases.  See a more developed version
+of this functionality in scikit-learn:** https://github.com/scikit-learn/scikit-learn/pull/1732/
+
 ===========
 pyDistances
 ===========
